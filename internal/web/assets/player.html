@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Video Player</title>
+  <style>
+    :root { color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    body { margin: 0; min-height: 100vh; background: #080d19; color: #edf2ff; }
+    main { width: min(1180px, calc(100% - 32px)); margin: 0 auto; padding: 32px 0 56px; }
+    header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 24px; }
+    .nav { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+    a { color: #9bbcff; text-decoration: none; }
+    a:hover, a:focus-visible { color: #c8d8ff; outline: none; }
+    h1 { margin: 0; font-size: clamp(1.8rem, 4vw, 3rem); letter-spacing: -0.04em; }
+    button { border: 1px solid #3a4663; border-radius: 999px; background: #192036; color: #edf2ff; padding: 10px 16px; cursor: pointer; }
+    button:hover, button:focus-visible { border-color: #8fb3ff; outline: none; }
+    .layout { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 24px; align-items: start; }
+    .panel { background: #12182a; border: 1px solid #25304a; border-radius: 20px; padding: 18px; box-shadow: 0 20px 80px rgb(0 0 0 / 0.28); }
+    video { display: block; width: 100%; max-height: 72vh; background: #000; border-radius: 14px; }
+    #message { margin-top: 14px; color: #aab6d3; }
+    #message.error { color: #ffb4b4; }
+    #chaptersPanel h2 { margin: 0 0 12px; font-size: 1.1rem; }
+    #chapters { display: grid; gap: 8px; }
+    .chapter { width: 100%; text-align: left; border-radius: 12px; border-color: #2a3654; background: #1a2237; padding: 12px 14px; }
+    .chapter small { display: block; color: #9fb0d0; margin-top: 4px; }
+    .chapter.active { border-color: #8fb3ff; background: #223154; }
+    [hidden] { display: none !important; }
+    @media (max-width: 860px) { .layout { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div class="nav">
+        <a href="/">← Back to library</a>
+        <h1 id="title">Video Player</h1>
+      </div>
+      <form method="post" action="/logout">
+        <button type="submit">Sign out</button>
+      </form>
+    </header>
+
+    <div class="layout">
+      <section class="panel">
+        <video id="video" controls playsinline></video>
+        <div id="message" role="status">Preparing player…</div>
+      </section>
+
+      <aside id="chaptersPanel" class="panel" hidden>
+        <h2>Chapters</h2>
+        <div id="chapters"></div>
+      </aside>
+    </div>
+  </main>
+
+  <script src="/static/hls.min.js"></script>
+  <script>
+    const params = new URLSearchParams(location.search);
+    const show = params.get('show') || '';
+    const showPath = encodeURIComponent(show);
+    const video = document.getElementById('video');
+    const title = document.getElementById('title');
+    const message = document.getElementById('message');
+    const chaptersPanel = document.getElementById('chaptersPanel');
+    const chaptersEl = document.getElementById('chapters');
+    let chapterCues = [];
+
+    if (!show) {
+      setMessage('Choose a show from the library before opening the player.', true);
+    } else {
+      title.textContent = show;
+      const playlistURL = '/hls/' + showPath + '/playlist.m3u8';
+      const chaptersURL = '/hls/' + showPath + '/chapters.vtt';
+      addChapterTrack(chaptersURL);
+      loadVideo(playlistURL);
+      loadChapters(chaptersURL);
+    }
+
+    function setMessage(text, isError) {
+      message.textContent = text;
+      message.classList.toggle('error', Boolean(isError));
+    }
+
+    function addChapterTrack(chaptersURL) {
+      const track = document.createElement('track');
+      track.kind = 'chapters';
+      track.src = chaptersURL;
+      track.default = true;
+      video.append(track);
+    }
+
+    function loadVideo(playlistURL) {
+      if (window.Hls && Hls.isSupported()) {
+        const hls = new Hls({
+          xhrSetup: xhr => { xhr.withCredentials = true; },
+          fetchSetup: (ctx, init) => {
+            init = init || {};
+            init.credentials = 'include';
+            return new Request(ctx.url, init);
+          }
+        });
+        hls.loadSource(playlistURL);
+        hls.attachMedia(video);
+        hls.on(Hls.Events.ERROR, (event, data) => {
+          const status = data && data.response && data.response.code;
+          if (data && data.fatal && (status === 401 || status === 403)) {
+            location.href = '/login';
+            return;
+          }
+          if (!data || !data.fatal) {
+            return;
+          }
+          if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+            hls.startLoad();
+          } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+            hls.recoverMediaError();
+          } else {
+            hls.destroy();
+            setMessage('Playback failed. Please return to the library and try again.', true);
+          }
+        });
+        video.addEventListener('loadedmetadata', () => setMessage('Ready to play.', false), { once: true });
+      } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+        video.src = playlistURL;
+        video.addEventListener('loadedmetadata', () => setMessage('Ready to play.', false), { once: true });
+      } else {
+        setMessage('This browser cannot play HLS video.', true);
+      }
+    }
+
+    async function loadChapters(chaptersURL) {
+      try {
+        const response = await fetch(chaptersURL, { credentials: 'same-origin' });
+        if (response.status === 401 || response.status === 403) {
+          location.href = '/login';
+          return;
+        }
+        if (response.status === 404) {
+          chaptersPanel.hidden = true;
+          return;
+        }
+        if (!response.ok) {
+          throw new Error('Unable to load chapters.');
+        }
+        chapterCues = parseWebVTT(await response.text());
+        renderChapters(chapterCues);
+      } catch (error) {
+        chaptersPanel.hidden = true;
+      }
+    }
+
+    function parseWebVTT(text) {
+      const cues = [];
+      const lines = text.replace(/\r/g, '').split('\n');
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i].trim();
+        if (!line || line === 'WEBVTT' || !line.includes('-->')) {
+          continue;
+        }
+        const parts = line.split('-->');
+        const start = parseTimestamp(parts[0].trim());
+        const end = parseTimestamp(parts[1].trim().split(/\s+/)[0]);
+        const label = (lines[i + 1] || '').trim();
+        if (Number.isFinite(start) && Number.isFinite(end) && label) {
+          cues.push({ start, end, label });
+        }
+      }
+      return cues;
+    }
+
+    function parseTimestamp(value) {
+      const match = value.match(/^(?:(\d{2}):)?(\d{2}):(\d{2})\.(\d{3})$/);
+      if (!match) {
+        return Number.NaN;
+      }
+      const hours = Number(match[1] || 0);
+      const minutes = Number(match[2]);
+      const seconds = Number(match[3]);
+      const millis = Number(match[4]);
+      return hours * 3600 + minutes * 60 + seconds + millis / 1000;
+    }
+
+    function renderChapters(cues) {
+      chaptersEl.textContent = '';
+      if (cues.length === 0) {
+        chaptersPanel.hidden = true;
+        return;
+      }
+      chaptersPanel.hidden = false;
+      for (const cue of cues) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'chapter';
+        button.dataset.start = String(cue.start);
+        button.innerHTML = '<span></span><small></small>';
+        button.querySelector('span').textContent = cue.label;
+        button.querySelector('small').textContent = formatTime(cue.start);
+        button.addEventListener('click', () => {
+          video.currentTime = cue.start;
+          video.play().catch(() => {});
+        });
+        chaptersEl.append(button);
+      }
+    }
+
+    function formatTime(totalSeconds) {
+      const total = Math.floor(totalSeconds);
+      const hours = Math.floor(total / 3600);
+      const minutes = Math.floor((total % 3600) / 60);
+      const seconds = total % 60;
+      return [hours, minutes, seconds].map(part => String(part).padStart(2, '0')).join(':');
+    }
+
+    video.addEventListener('timeupdate', () => {
+      const active = chapterCues.find(cue => video.currentTime >= cue.start && video.currentTime < cue.end);
+      for (const button of chaptersEl.querySelectorAll('.chapter')) {
+        button.classList.toggle('active', active && Number(button.dataset.start) === active.start);
+      }
+    });
+  </script>
+</body>
+</html>
