@@ -13,6 +13,13 @@
           version = "0.1.0";
           src = ./.;
           vendorHash = null;
+          # The Go module path's last element is "large-video-streamer", so the
+          # compiled binary is named that. Rename it to the friendlier
+          # "vid-streamer" expected by meta.mainProgram, the dev app, and the
+          # NixOS module (lib.getExe cfg.package).
+          postInstall = ''
+            mv "$out/bin/large-video-streamer" "$out/bin/vid-streamer"
+          '';
           meta.mainProgram = "vid-streamer";
         };
         devScript = pkgs.writeShellApplication {
