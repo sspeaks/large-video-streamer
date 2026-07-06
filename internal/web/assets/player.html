@@ -25,6 +25,12 @@
     .chapter { width: 100%; text-align: left; border-radius: 12px; border-color: #2a3654; background: #1a2237; padding: 12px 14px; }
     .chapter small { display: block; color: #9fb0d0; margin-top: 4px; }
     .chapter.active { border-color: #8fb3ff; background: #223154; }
+    .hint { color: #9fb0d0; font-size: 0.9rem; line-height: 1.5; margin: 0 0 12px; }
+    .labelControls { display: flex; gap: 8px; flex-wrap: wrap; }
+    .labelControls input { flex: 1; min-width: 140px; padding: 10px 12px; border-radius: 12px; border: 1px solid #3a4663; background: #0b1120; color: #edf2ff; }
+    .labelMsg { min-height: 1.2rem; font-size: 0.9rem; margin: 8px 0; color: #8fb3ff; }
+    #sidePanel h2 { margin: 16px 0 12px; font-size: 1.1rem; }
+    #sidePanel h2:first-of-type { margin-top: 0; }
     [hidden] { display: none !important; }
     @media (max-width: 860px) { .layout { grid-template-columns: 1fr; } }
   </style>
@@ -47,7 +53,15 @@
         <div id="message" role="status">Preparing player…</div>
       </section>
 
-      <aside id="chaptersPanel" class="panel" hidden>
+      <aside id="sidePanel" class="panel" hidden>
+        <h2>Label this show</h2>
+        <p class="hint">Play to where a group takes the stage, type a name, then mark the start — it becomes a chapter anyone can jump to.</p>
+        <div class="labelControls">
+          <input id="boundaryName" type="text" placeholder="Group name (e.g. group-a)" aria-label="Boundary name">
+          <button id="markBtn" type="button">Mark start here</button>
+        </div>
+        <div id="labelMsg" class="labelMsg" role="status"></div>
+        <p><a id="editLabels" href="#">Open full label editor ↗</a></p>
         <h2>Chapters</h2>
         <div id="chapters"></div>
       </aside>
@@ -62,8 +76,11 @@
     const video = document.getElementById('video');
     const title = document.getElementById('title');
     const message = document.getElementById('message');
-    const chaptersPanel = document.getElementById('chaptersPanel');
+    const chaptersPanel = document.getElementById('sidePanel');
     const chaptersEl = document.getElementById('chapters');
+    const boundaryNameEl = document.getElementById('boundaryName');
+    const labelMsgEl = document.getElementById('labelMsg');
+    const editLabelsEl = document.getElementById('editLabels');
     let chapterCues = [];
 
     if (!show) {
@@ -72,9 +89,56 @@
       title.textContent = show;
       const playlistURL = '/hls/' + showPath + '/playlist.m3u8';
       const chaptersURL = '/hls/' + showPath + '/chapters.vtt';
+      chaptersPanel.hidden = false;
+      editLabelsEl.href = '/labels/' + showPath;
+      document.getElementById('markBtn').addEventListener('click', markBoundary);
       addChapterTrack(chaptersURL);
       loadVideo(playlistURL);
       loadChapters(chaptersURL);
+    }
+
+    function setLabelMsg(text, isError) {
+      labelMsgEl.textContent = text;
+      labelMsgEl.style.color = isError ? '#ffb4b4' : '#8fb3ff';
+    }
+
+    // Capture the current playback position as a named chapter start and save it.
+    async function markBoundary() {
+      const name = (boundaryNameEl.value || '').trim();
+      if (!name) {
+        setLabelMsg('Enter a group name first.', true);
+        return;
+      }
+      const start = Math.round(video.currentTime || 0);
+      try {
+        const current = await fetch('/labels/api/' + showPath, { credentials: 'same-origin' });
+        if (current.status === 401 || current.status === 403) {
+          location.href = '/login';
+          return;
+        }
+        const labels = current.ok ? await current.json() : { video: show, boundaries: [], candidates: [] };
+        labels.video = show;
+        labels.boundaries = labels.boundaries || [];
+        labels.boundaries.push({ name: name, start: start });
+        const saved = await fetch('/labels/api/' + showPath, {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(labels)
+        });
+        if (saved.status === 401 || saved.status === 403) {
+          location.href = '/login';
+          return;
+        }
+        if (!saved.ok) {
+          throw new Error(await saved.text());
+        }
+        boundaryNameEl.value = '';
+        setLabelMsg('Marked "' + name + '" at ' + formatTime(start) + '.', false);
+        loadChapters('/hls/' + showPath + '/chapters.vtt');
+      } catch (error) {
+        setLabelMsg('Could not save: ' + error.message, true);
+      }
     }
 
     function setMessage(text, isError) {
@@ -137,7 +201,7 @@
           return;
         }
         if (response.status === 404) {
-          chaptersPanel.hidden = true;
+          renderChapters([]);
           return;
         }
         if (!response.ok) {
@@ -146,7 +210,7 @@
         chapterCues = parseWebVTT(await response.text());
         renderChapters(chapterCues);
       } catch (error) {
-        chaptersPanel.hidden = true;
+        renderChapters([]);
       }
     }
 
@@ -184,10 +248,12 @@
     function renderChapters(cues) {
       chaptersEl.textContent = '';
       if (cues.length === 0) {
-        chaptersPanel.hidden = true;
+        const hint = document.createElement('p');
+        hint.className = 'hint';
+        hint.textContent = 'No chapters yet — mark one above.';
+        chaptersEl.append(hint);
         return;
       }
-      chaptersPanel.hidden = false;
       for (const cue of cues) {
         const button = document.createElement('button');
         button.type = 'button';

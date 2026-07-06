@@ -107,6 +107,45 @@ func TestListReturnsShowsWithPlaylistsSortedByName(t *testing.T) {
 	}
 }
 
+func TestListShowsMarksReadyAndProcessing(t *testing.T) {
+	hlsRoot := t.TempDir()
+	videoDir := t.TempDir()
+
+	// A ready show: HLS playlist already generated.
+	if err := os.MkdirAll(filepath.Join(hlsRoot, "ready1"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hlsRoot, "ready1", "playlist.m3u8"), []byte("#EXTM3U\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Source videos: ready1.mkv (already segmented) and pending1.mkv (not yet).
+	for _, name := range []string{"ready1.mkv", "pending1.mkv"} {
+		if err := os.WriteFile(filepath.Join(videoDir, name), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	srv := New(config.Config{HLSDir: hlsRoot, VideoDir: videoDir})
+	shows, err := srv.ListShows()
+	if err != nil {
+		t.Fatalf("ListShows returned error: %v", err)
+	}
+	if len(shows) != 2 {
+		t.Fatalf("len(shows) = %d, want 2: %#v", len(shows), shows)
+	}
+
+	byName := map[string]Show{}
+	for _, show := range shows {
+		byName[show.Name] = show
+	}
+	if r := byName["ready1"]; r.Status != "ready" || r.Playlist == "" {
+		t.Fatalf("ready1 = %#v, want ready with playlist", r)
+	}
+	if p := byName["pending1"]; p.Status != "processing" || p.Playlist != "" {
+		t.Fatalf("pending1 = %#v, want processing without playlist", p)
+	}
+}
+
 func buildTestHLSDir(t *testing.T) string {
 	t.Helper()
 	root := "hls-test-root"

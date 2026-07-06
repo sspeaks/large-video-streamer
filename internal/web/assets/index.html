@@ -16,6 +16,8 @@
     a.show { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 18px 20px; border-radius: 14px; color: #edf2ff; text-decoration: none; background: #1b2338; border: 1px solid #2a3654; transition: transform 150ms ease, border-color 150ms ease, background 150ms ease; }
     a.show:hover, a.show:focus-visible { transform: translateY(-1px); border-color: #7aa2ff; background: #222d49; outline: none; }
     a.show span:last-child { color: #8fb3ff; }
+    .show.processing { opacity: 0.65; cursor: default; }
+    .show.processing span:last-child { color: #d8b46a; }
     button { border: 1px solid #3a4663; border-radius: 999px; background: #192036; color: #edf2ff; padding: 10px 16px; cursor: pointer; }
     button:hover, button:focus-visible { border-color: #8fb3ff; outline: none; }
     .empty, .status { text-align: center; padding: 48px 16px; color: #aab6d3; }
@@ -43,6 +45,7 @@
   <script>
     const statusEl = document.getElementById('status');
     const showsEl = document.getElementById('shows');
+    let pollTimer = null;
 
     async function loadShows() {
       try {
@@ -58,6 +61,7 @@
         const shows = await response.json();
         renderShows(Array.isArray(shows) ? shows : []);
       } catch (error) {
+        statusEl.hidden = false;
         statusEl.textContent = 'Sorry, the show list could not be loaded.';
         statusEl.classList.add('error');
       }
@@ -65,29 +69,63 @@
 
     function renderShows(shows) {
       showsEl.textContent = '';
+      const processingCount = shows.filter((s) => s.status === 'processing').length;
+
       if (shows.length === 0) {
-        statusEl.textContent = 'No shows are available yet. Add media and check back here.';
+        statusEl.hidden = false;
+        statusEl.classList.remove('error');
+        statusEl.textContent = 'No videos found. Add .mkv files to the video folder.';
         showsEl.hidden = true;
+        schedulePoll(false);
         return;
       }
 
-      statusEl.hidden = true;
+      statusEl.hidden = processingCount === 0;
+      if (processingCount > 0) {
+        statusEl.classList.remove('error');
+        statusEl.textContent = 'Preparing ' + processingCount + ' video(s) for streaming… this page updates automatically.';
+      }
       showsEl.hidden = false;
+
       for (const show of shows) {
         const name = String(show.name || 'Untitled show');
         const item = document.createElement('li');
-        const link = document.createElement('a');
-        link.className = 'show';
-        link.href = '/player?show=' + encodeURIComponent(name);
 
-        const title = document.createElement('span');
-        title.textContent = name;
-        const action = document.createElement('span');
-        action.textContent = 'Play →';
+        if (show.status === 'processing' || !show.playlist) {
+          const row = document.createElement('div');
+          row.className = 'show processing';
+          const title = document.createElement('span');
+          title.textContent = name;
+          const state = document.createElement('span');
+          state.textContent = 'Processing…';
+          row.append(title, state);
+          item.append(row);
+        } else {
+          const link = document.createElement('a');
+          link.className = 'show';
+          link.href = '/player?show=' + encodeURIComponent(name);
+          const title = document.createElement('span');
+          title.textContent = name;
+          const action = document.createElement('span');
+          action.textContent = 'Play →';
+          link.append(title, action);
+          item.append(link);
+        }
 
-        link.append(title, action);
-        item.append(link);
         showsEl.append(item);
+      }
+
+      // Auto-refresh while any video is still being segmented.
+      schedulePoll(processingCount > 0);
+    }
+
+    function schedulePoll(active) {
+      if (pollTimer) {
+        clearTimeout(pollTimer);
+        pollTimer = null;
+      }
+      if (active) {
+        pollTimer = setTimeout(loadShows, 4000);
       }
     }
 

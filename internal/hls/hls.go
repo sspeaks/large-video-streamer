@@ -17,10 +17,12 @@ type Server struct {
 	cfg config.Config
 }
 
-// Show describes a generated HLS show with a playable playlist.
+// Show describes a video. A "ready" show has a playable HLS playlist; a
+// "processing" show is a source video still being segmented (no playlist yet).
 type Show struct {
 	Name     string `json:"name"`
-	Playlist string `json:"playlist"`
+	Playlist string `json:"playlist,omitempty"`
+	Status   string `json:"status,omitempty"`
 }
 
 // New returns an HLS server using cfg.HLSDir as its media root.
@@ -84,6 +86,48 @@ func (s *Server) List() ([]Show, error) {
 			Name:     name,
 			Playlist: "/hls/" + url.PathEscape(name) + "/playlist.m3u8",
 		})
+	}
+
+	sort.Slice(shows, func(i, j int) bool {
+		return shows[i].Name < shows[j].Name
+	})
+	return shows, nil
+}
+
+// ListShows returns every source video: those already segmented (Status
+// "ready", with a Playlist) and those still being segmented (Status
+// "processing", no Playlist). This lets the UI show a video that exists on disk
+// but whose HLS output isn't ready yet, instead of appearing empty.
+func (s *Server) ListShows() ([]Show, error) {
+	ready, err := s.List()
+	if err != nil {
+		return nil, err
+	}
+
+	readyNames := make(map[string]bool, len(ready))
+	shows := make([]Show, 0, len(ready))
+	for _, show := range ready {
+		show.Status = "ready"
+		readyNames[show.Name] = true
+		shows = append(shows, show)
+	}
+
+	// Source videos without a ready playlist are still processing.
+	if entries, err := os.ReadDir(s.cfg.VideoDir); err == nil {
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			ext := filepath.Ext(entry.Name())
+			if !strings.EqualFold(ext, ".mkv") {
+				continue
+			}
+			name := strings.TrimSuffix(entry.Name(), ext)
+			if readyNames[name] {
+				continue
+			}
+			shows = append(shows, Show{Name: name, Status: "processing"})
+		}
 	}
 
 	sort.Slice(shows, func(i, j int) bool {

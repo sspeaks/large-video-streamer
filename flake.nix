@@ -28,13 +28,23 @@
           text = ''
             set -euo pipefail
             VIDEO_DIR="''${1:-$PWD/videos}"
-            STATE="''${VIDSTREAMER_DEV_STATE_DIR:-$PWD/.gotmp/vid-streamer-dev-state-$$}"
+            if [ -n "''${VIDSTREAMER_DEV_STATE_DIR:-}" ]; then
+              # Persistent state dir (opt-in): segments are cached across runs.
+              STATE="$VIDSTREAMER_DEV_STATE_DIR"
+            else
+              # Ephemeral dev output removed on exit; generated HLS can be as
+              # large as the source videos, so we don't leave it lying around.
+              STATE="$(mktemp -d -t vid-streamer-dev.XXXXXX)"
+              trap 'rm -rf "$STATE"' EXIT INT TERM
+            fi
             mkdir -p "$STATE/hls"
             export VIDSTREAMER_DEV_NOAUTH=1
             export VIDSTREAMER_SEGMENT_ON_START=1
             export VIDEO_DIR HLS_DIR="$STATE/hls" LISTEN_ADDR="127.0.0.1:8080"
             echo "vid-streamer DEV (NO AUTH) on http://127.0.0.1:8080  (video_dir=$VIDEO_DIR)"
-            exec vid-streamer
+            echo "temporary HLS output: $STATE/hls (removed on exit; set VIDSTREAMER_DEV_STATE_DIR to keep)"
+            # Not exec: keep this shell alive so the cleanup trap runs on exit.
+            vid-streamer
           '';
         };
         apps = {

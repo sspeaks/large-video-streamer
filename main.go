@@ -31,7 +31,7 @@ func main() {
 	store.RegisterRoutes(mux, a)
 	// Gated JSON list of available shows for the index page (401 when unauthenticated).
 	mux.Handle("GET /api/shows", a.RequireMedia(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		shows, err := hlsSrv.List()
+		shows, err := hlsSrv.ListShows()
 		if err != nil {
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
