@@ -67,4 +67,32 @@ Secret file values are read with trailing newlines removed.
 
 ## NixOS module
 
-The flake exports `nixosModules.vidStreamer` and `nixosModules.default`. The current module defines `services.vidStreamer.enable`, `package`, `videoDir`, `hlsDir`, and `listenAddr`; systemd wiring is a later task.
+The flake exports `nixosModules.vidStreamer` and `nixosModules.default`. Add it to a NixOS configuration flake and wire the package from the same input:
+
+```nix
+{
+  inputs.vid-streamer.url = "github:sspeaks/large-video-streamer";
+
+  outputs = { nixpkgs, vid-streamer, ... }: {
+    nixosConfigurations.host = nixpkgs.lib.nixosSystem {
+      system = "x86_64-linux";
+      modules = [
+        vid-streamer.nixosModules.vidStreamer
+        {
+          services.vidStreamer = {
+            enable = true;
+            package = vid-streamer.packages.x86_64-linux.default;
+            videoDir = "/srv/videos";
+            listenAddr = "127.0.0.1:8080";
+            loginUserFile = "/run/secrets/vid-streamer-user";
+            loginPassFile = "/run/secrets/vid-streamer-pass";
+            cookieSecretFile = "/run/secrets/vid-streamer-cookie-secret";
+          };
+        }
+      ];
+    };
+  };
+}
+```
+
+Set `services.vidStreamer.noAuth = true` only for trusted/local deployments; it disables the credential file requirements. For local development, `nix run .#dev` starts the dev server.

@@ -15,10 +15,35 @@
           vendorHash = null;
           meta.mainProgram = "vid-streamer";
         };
+        devScript = pkgs.writeShellApplication {
+          name = "vid-streamer-dev";
+          runtimeInputs = [ vid-streamer pkgs.ffmpeg pkgs.mkvtoolnix ];
+          text = ''
+            set -euo pipefail
+            VIDEO_DIR="''${1:-$PWD/videos}"
+            STATE="''${VIDSTREAMER_DEV_STATE_DIR:-$PWD/.gotmp/vid-streamer-dev-state-$$}"
+            mkdir -p "$STATE/hls"
+            export VIDSTREAMER_DEV_NOAUTH=1
+            export VIDSTREAMER_SEGMENT_ON_START=1
+            export VIDEO_DIR HLS_DIR="$STATE/hls" LISTEN_ADDR="127.0.0.1:8080"
+            echo "vid-streamer DEV (NO AUTH) on http://127.0.0.1:8080  (video_dir=$VIDEO_DIR)"
+            exec vid-streamer
+          '';
+        };
+        apps = {
+          dev = {
+            type = "app";
+            program = "${devScript}/bin/vid-streamer-dev";
+            meta.description = "Run a temporary passwordless local dev server (no auth) serving VIDEO_DIR.";
+          };
+          default = apps.dev;
+        };
       in
       {
         packages.default = vid-streamer;
         packages.vid-streamer = vid-streamer;
+
+        inherit apps;
 
         devShells.default = pkgs.mkShell {
           packages = [

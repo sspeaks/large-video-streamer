@@ -9,6 +9,7 @@ import (
 	"github.com/sspeaks/large-video-streamer/internal/config"
 	"github.com/sspeaks/large-video-streamer/internal/hls"
 	"github.com/sspeaks/large-video-streamer/internal/labels"
+	"github.com/sspeaks/large-video-streamer/internal/segment"
 	"github.com/sspeaks/large-video-streamer/internal/web"
 )
 
@@ -16,6 +17,9 @@ func main() {
 	cfg, err := config.Load()
 	if err != nil {
 		log.Fatal(err)
+	}
+	if cfg.NoAuth {
+		log.Printf("WARNING: authentication DISABLED (VIDSTREAMER_DEV_NOAUTH) — do NOT expose this server to the internet")
 	}
 	mux := http.NewServeMux()
 	a := auth.New(cfg)
@@ -41,6 +45,13 @@ func main() {
 	})))
 	mux.Handle("GET /player", a.RequirePage(web.Player()))
 	mux.Handle("GET /{$}", a.RequirePage(web.Index()))
+	if cfg.SegmentOnStart {
+		go func() {
+			if err := segment.SegmentAll(cfg); err != nil {
+				log.Printf("segment-on-start: %v", err)
+			}
+		}()
+	}
 	log.Printf("vid-streamer listening on %s (videoDir=%s hlsDir=%s)", cfg.ListenAddr, cfg.VideoDir, cfg.HLSDir)
 	log.Fatal(http.ListenAndServe(cfg.ListenAddr, mux))
 }

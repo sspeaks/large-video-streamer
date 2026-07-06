@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"encoding/base64"
 	"os"
 	"path/filepath"
@@ -53,5 +54,71 @@ func TestLoadRejectsMissingRequiredFields(t *testing.T) {
 	_, err := Load()
 	if err == nil {
 		t.Fatal("Load() error = nil, want missing required fields error")
+	}
+}
+
+func TestLoadDevNoAuthDoesNotRequireCredentials(t *testing.T) {
+	for _, name := range []string{"LOGIN_USER", "LOGIN_USER_FILE", "LOGIN_PASS", "LOGIN_PASS_FILE", "COOKIE_SECRET", "COOKIE_SECRET_FILE"} {
+		t.Setenv(name, "")
+	}
+	t.Setenv("VIDEO_DIR", "/videos")
+	t.Setenv("VIDSTREAMER_DEV_NOAUTH", "1")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !cfg.NoAuth {
+		t.Fatal("NoAuth = false, want true")
+	}
+	if cfg.LoginUser != "" || cfg.LoginPass != "" {
+		t.Fatalf("credentials = (%q, %q), want empty", cfg.LoginUser, cfg.LoginPass)
+	}
+	if len(cfg.CookieSecret) < 32 {
+		t.Fatalf("CookieSecret length = %d, want at least 32", len(cfg.CookieSecret))
+	}
+}
+
+func TestLoadWithoutDevNoAuthStillRequiresCredentials(t *testing.T) {
+	for _, name := range []string{"LOGIN_USER", "LOGIN_USER_FILE", "LOGIN_PASS", "LOGIN_PASS_FILE", "COOKIE_SECRET", "COOKIE_SECRET_FILE", "VIDSTREAMER_DEV_NOAUTH"} {
+		t.Setenv(name, "")
+	}
+	t.Setenv("VIDEO_DIR", "/videos")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() error = nil, want credentials required without VIDSTREAMER_DEV_NOAUTH")
+	}
+}
+
+func TestLoadAutoGeneratesAndPersistsCookieSecret(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"COOKIE_SECRET", "COOKIE_SECRET_FILE", "VIDSTREAMER_DEV_NOAUTH", "STATE_DIRECTORY"} {
+		t.Setenv(name, "")
+	}
+	t.Setenv("VIDEO_DIR", "/videos")
+	t.Setenv("HLS_DIR", filepath.Join(dir, "hls")) // parent dir => secret persisted at <dir>/cookie-secret
+	t.Setenv("LOGIN_USER", "alice")
+	t.Setenv("LOGIN_PASS", "secret")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if len(cfg.CookieSecret) < 32 {
+		t.Fatalf("CookieSecret length = %d, want >= 32", len(cfg.CookieSecret))
+	}
+	secretPath := filepath.Join(dir, "cookie-secret")
+	if _, err := os.Stat(secretPath); err != nil {
+		t.Fatalf("expected persisted cookie secret at %q: %v", secretPath, err)
+	}
+
+	// A second Load must return the SAME persisted secret (stable across restarts).
+	cfg2, err := Load()
+	if err != nil {
+		t.Fatalf("second Load() error = %v", err)
+	}
+	if !bytes.Equal(cfg.CookieSecret, cfg2.CookieSecret) {
+		t.Fatal("cookie secret changed between loads; expected persisted secret to be reused")
 	}
 }

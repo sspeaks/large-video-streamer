@@ -5,6 +5,7 @@ import (
 	"errors"
 	"html/template"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/sspeaks/large-video-streamer/internal/auth"
+	"github.com/sspeaks/large-video-streamer/internal/detect"
 )
 
 var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doctype html>
@@ -47,6 +49,7 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
       <button id="save">Save</button>
       <button id="export">Export timestamps</button>
       <button id="import">Import timestamps</button>
+      <button id="detect" class="secondary">Detect silences</button>
     </div>
     <div class="grid">
       <section>
@@ -137,6 +140,17 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
       render();
       setStatus('Imported timestamps and wrote chapters.vtt');
     });
+    document.getElementById('detect').addEventListener('click', async () => {
+      setStatus('Detecting silences (analyzing audio)…');
+      const res = await fetch(api + '/detect', { method: 'POST' });
+      if (!res.ok) { setStatus('Detect failed: ' + (await res.text())); return; }
+      labels = await res.json();
+      labels.boundaries = labels.boundaries || [];
+      labels.candidates = labels.candidates || [];
+      render();
+      const n = (labels.candidates || []).filter(c => (c.status || 'candidate') === 'candidate').length;
+      setStatus('Detected ' + n + ' candidate boundary(ies) — promote or reject each, then Save.');
+    });
     (async () => {
       try {
         const res = await fetch(api);
@@ -160,6 +174,7 @@ func (s *Store) RegisterRoutes(mux *http.ServeMux, a *auth.Authenticator) {
 	mux.Handle("GET /labels/api/{show}/export", a.RequireMedia(http.HandlerFunc(s.handleLabelsExport)))
 	mux.Handle("POST /labels/api/{show}/mkv/import", a.RequireMedia(http.HandlerFunc(s.handleMKVImport)))
 	mux.Handle("POST /labels/api/{show}/mkv/embed", a.RequireMedia(http.HandlerFunc(s.handleMKVEmbed)))
+	mux.Handle("POST /labels/api/{show}/detect", a.RequireMedia(http.HandlerFunc(s.handleDetect)))
 }
 
 func (s *Store) handleLabelsPage(w http.ResponseWriter, r *http.Request) {
@@ -285,6 +300,66 @@ func (s *Store) handleMKVEmbed(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleDetect runs ffmpeg silencedetect over the source .mkv and merges the
+// resulting candidate boundaries into the show's labels. It preserves any
+// existing user decisions (candidates already promoted/rejected) and only adds
+// newly detected times that don't coincide with a kept candidate. Candidates do
+// not affect chapters.vtt until promoted to boundaries, so we only Save here.
+func (s *Store) handleDetect(w http.ResponseWriter, r *http.Request) {
+	show, ok := validShowFromRequest(w, r)
+	if !ok {
+		return
+	}
+	labels, err := s.Load(show)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	silences, err := detect.DetectSilence(filepath.Join(s.cfg.VideoDir, show+".mkv"), detect.DefaultNoiseDB, detect.DefaultMinDur)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	detected := make([]Candidate, 0, len(silences))
+	for _, sil := range silences {
+		detected = append(detected, Candidate{Time: sil.Time, Duration: sil.Duration, Status: "candidate"})
+	}
+	labels.Candidates = mergeCandidates(labels.Candidates, detected)
+	labels.Video = show
+	if err := s.Save(labels); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, labels)
+}
+
+// mergeCandidates keeps candidates the user has already decided on
+// (status "named" or "rejected") and adds freshly detected candidates whose
+// time is not within one second of a kept one. The result is sorted by time.
+func mergeCandidates(existing, detected []Candidate) []Candidate {
+	var kept []Candidate
+	for _, c := range existing {
+		if c.Status == "named" || c.Status == "rejected" {
+			kept = append(kept, c)
+		}
+	}
+	result := append([]Candidate(nil), kept...)
+	for _, d := range detected {
+		duplicate := false
+		for _, k := range kept {
+			if math.Abs(k.Time-d.Time) < 1.0 {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			result = append(result, d)
+		}
+	}
+	sort.SliceStable(result, func(i, j int) bool { return result[i].Time < result[j].Time })
+	return result
 }
 
 func validShowFromRequest(w http.ResponseWriter, r *http.Request) (string, bool) {

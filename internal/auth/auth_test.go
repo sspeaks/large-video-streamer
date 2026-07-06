@@ -145,6 +145,32 @@ func TestRequirePageRedirectsWithoutCookie(t *testing.T) {
 	}
 }
 
+func TestNoAuthBypassesPageAndMediaGatesWithoutCookie(t *testing.T) {
+	a := New(config.Config{NoAuth: true})
+	for name, gate := range map[string]func(http.Handler) http.Handler{
+		"page":  a.RequirePage,
+		"media": a.RequireMedia,
+	} {
+		t.Run(name, func(t *testing.T) {
+			nextCalled := false
+			next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				nextCalled = true
+				w.WriteHeader(http.StatusOK)
+			})
+
+			rr := httptest.NewRecorder()
+			gate(next).ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/", nil))
+
+			if rr.Code != http.StatusOK {
+				t.Fatalf("status = %d, want %d", rr.Code, http.StatusOK)
+			}
+			if !nextCalled {
+				t.Fatal("next handler was not called")
+			}
+		})
+	}
+}
+
 func TestLoginSuccessSetsCookieAndRedirects(t *testing.T) {
 	a := testAuthenticator()
 	mux := http.NewServeMux()

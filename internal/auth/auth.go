@@ -77,6 +77,10 @@ func (a *Authenticator) RegisterRoutes(mux *http.ServeMux) {
 // RequirePage protects HTML pages.
 func (a *Authenticator) RequirePage(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if a.cfg.NoAuth {
+			next.ServeHTTP(w, r)
+			return
+		}
 		if !a.isAuthenticated(r) {
 			http.Redirect(w, r, "/login", http.StatusFound)
 			return
@@ -88,6 +92,10 @@ func (a *Authenticator) RequirePage(next http.Handler) http.Handler {
 // RequireMedia protects media assets.
 func (a *Authenticator) RequireMedia(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if a.cfg.NoAuth {
+			next.ServeHTTP(w, r)
+			return
+		}
 		if !a.isAuthenticated(r) {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
