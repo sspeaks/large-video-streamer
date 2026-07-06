@@ -149,6 +149,9 @@ in
         PrivateTmp = true;
         RestrictAddressFamilies = [ "AF_INET" "AF_INET6" ];
         ReadWritePaths = [ cfg.hlsDir ];
+        # Ensure the (read-only) source video folder is readable even with
+        # ProtectHome/ProtectSystem, wherever the operator places it.
+        BindReadOnlyPaths = [ cfg.videoDir ];
       } // lib.optionalAttrs (!cfg.noAuth) {
         ConditionPathExists = cfg.loginPassFile;
       };
