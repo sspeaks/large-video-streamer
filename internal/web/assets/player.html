@@ -4,59 +4,53 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Video Player</title>
+  <link rel="stylesheet" href="/static/app.css">
   <style>
-    :root { color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-    body { margin: 0; min-height: 100vh; background: #080d19; color: #edf2ff; }
+    body { background: var(--bg-deep); }
     main { width: min(1180px, calc(100% - 32px)); margin: 0 auto; padding: 32px 0 56px; }
-    header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 24px; }
-    .nav { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
-    a { color: #9bbcff; text-decoration: none; border-radius: 6px; }
-    a:hover { color: #c8d8ff; }
-    a:focus-visible, button:focus-visible, .chapter:focus-visible {
-      outline: 3px solid #ffd166;
-      outline-offset: 3px;
-      box-shadow: 0 0 0 6px rgb(255 209 102 / 0.18);
-    }
+    header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 24px; }
+    .nav { display: grid; gap: 10px; }
+    .backLink { justify-self: start; font-weight: 700; border-radius: var(--radius-sm); }
     h1 { margin: 0; font-size: clamp(1.8rem, 4vw, 3rem); letter-spacing: -0.04em; }
-    button { min-height: 44px; min-width: 44px; border: 1px solid #3a4663; border-radius: 999px; background: #192036; color: #edf2ff; padding: 10px 16px; cursor: pointer; white-space: nowrap; }
-    button:hover { border-color: #8fb3ff; }
+    button { min-height: 44px; min-width: 44px; border: 1px solid var(--secondary-border); border-radius: var(--radius-pill); background: var(--secondary-bg); color: var(--text); padding: 10px 16px; cursor: pointer; white-space: nowrap; font: inherit; }
+    button:hover { border-color: var(--accent); }
     .layout { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 24px; align-items: start; }
-    .panel { background: #12182a; border: 1px solid #25304a; border-radius: 20px; padding: 18px; box-shadow: 0 20px 80px rgb(0 0 0 / 0.28); }
-    video { display: block; width: 100%; max-height: 72vh; background: #000; border-radius: 14px; }
-    #message { margin-top: 14px; color: #aab6d3; }
-    #message.error { color: #ffb4b4; }
+    .panel { border-radius: var(--radius-lg); padding: 18px; }
+    video { display: block; width: 100%; max-height: 72vh; background: var(--bg-deep); border-radius: var(--radius); }
+    #message { margin-top: 14px; color: var(--text-muted); }
+    #message.error { color: var(--error-text); }
     #chaptersPanel h2 { margin: 0 0 12px; font-size: 1.1rem; }
     #chapters { display: grid; gap: 8px; }
     .chapterRow { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 8px; align-items: stretch; }
-    .chapter { width: 100%; text-align: left; border-radius: 12px; border-color: #2a3654; background: #1a2237; padding: 12px 14px; white-space: normal; }
-    .chapter small { display: block; color: #9fb0d0; margin-top: 4px; }
-    .chapter.active { border-color: #8fb3ff; background: #223154; }
-    .removeChapter { border-radius: 12px; border-color: #694154; background: #2a1620; color: #ffd7df; }
-    .removeChapter:hover { border-color: #ffb4c2; }
-    .shareChapter { border-radius: 12px; border-color: #3a5641; background: #16241a; color: #c9f7d7; }
-    .shareChapter:hover { border-color: #86efac; }
-    .sharePanel { background: #0b1120; border: 1px solid #25304a; border-radius: 12px; padding: 12px; display: grid; gap: 10px; }
-    .sharePanel label { font-size: 0.85rem; font-weight: 700; color: #edf2ff; display: grid; gap: 4px; }
-    .sharePanel select, .sharePanel input { min-height: 40px; box-sizing: border-box; width: 100%; padding: 8px 10px; border-radius: 10px; border: 1px solid #3a4663; background: #12182a; color: #edf2ff; font-size: 0.95rem; }
+    .chapter { width: 100%; text-align: left; border-radius: var(--radius); border-color: var(--border); background: var(--surface-2); padding: 12px 14px; white-space: normal; }
+    .chapter small { display: block; color: var(--text-muted); margin-top: 4px; }
+    .chapter.active { border-color: var(--accent); background: var(--secondary-bg); }
+    .removeChapter { border-radius: var(--radius); border-color: var(--danger-soft-border); background: var(--danger-soft-bg); color: var(--danger-soft-text); }
+    .removeChapter:hover { border-color: var(--danger); }
+    .shareChapter { border-radius: var(--radius); border-color: var(--secondary-border); background: var(--secondary-bg); color: var(--accent); }
+    .shareChapter:hover { border-color: var(--accent); }
+    .sharePanel { background: var(--surface-input); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; display: grid; gap: 10px; }
+    .sharePanel label { font-size: 0.85rem; font-weight: 700; color: var(--text); display: grid; gap: 4px; }
+    .sharePanel select, .sharePanel input { min-height: 40px; font-size: 0.95rem; }
     .sharePanel .shareActions { display: flex; gap: 8px; flex-wrap: wrap; }
     .shareResult { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
     .shareResult input { flex: 1 1 200px; }
-    .shareMsg { font-size: 0.85rem; color: #8fb3ff; min-height: 1rem; }
-    .shareMsg.error { color: #ffb4b4; }
-    .hint { color: #9fb0d0; font-size: 0.9rem; line-height: 1.5; margin: 0 0 12px; }
-    details.shortcuts { margin: 0 0 12px; color: #9fb0d0; font-size: 0.9rem; }
-    details.shortcuts summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; font-weight: 700; color: #edf2ff; }
+    .shareMsg { font-size: 0.85rem; color: var(--accent); min-height: 1rem; }
+    .shareMsg.error { color: var(--error-text); }
+    .hint { color: var(--text-muted); font-size: 0.9rem; line-height: 1.5; margin: 0 0 12px; }
+    details.shortcuts { margin: 0 0 12px; color: var(--text-muted); font-size: 0.9rem; }
+    details.shortcuts summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; font-weight: 700; color: var(--text); }
     details.shortcuts ul { margin: 8px 0 0; padding-left: 1.2rem; line-height: 1.7; }
-    details.shortcuts kbd { background: #0b1120; border: 1px solid #3a4663; border-radius: 6px; padding: 1px 6px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.85em; }
+    details.shortcuts kbd { background: var(--surface-input); border: 1px solid var(--secondary-border); border-radius: var(--radius-sm); padding: 1px 6px; font-family: var(--font-mono); font-size: 0.85em; }
     .labelControls { display: flex; align-items: end; gap: 8px; flex-wrap: wrap; }
     .fieldGroup { flex: 1 1 180px; display: grid; gap: 6px; }
-    .fieldGroup label { font-size: 0.9rem; font-weight: 700; color: #edf2ff; }
-    .labelControls input { min-height: 44px; box-sizing: border-box; width: 100%; min-width: 140px; padding: 10px 12px; border-radius: 12px; border: 1px solid #3a4663; background: #0b1120; color: #edf2ff; font-size: 1rem; }
-    .labelControls input:focus-visible { outline: 3px solid #ffd166; outline-offset: 3px; border-color: #8fb3ff; box-shadow: 0 0 0 6px rgb(255 209 102 / 0.18); }
-    .labelMsg { min-height: 1.2rem; font-size: 0.9rem; margin: 8px 0; color: #8fb3ff; }
+    .fieldGroup label { font-size: 0.9rem; font-weight: 700; color: var(--text); }
+    .labelControls input { min-width: 140px; border-radius: var(--radius); }
+    .labelMsg { min-height: 1.2rem; font-size: 0.9rem; margin: 8px 0; color: var(--accent); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .labelMsg.error { color: var(--error-text); }
+    .labelMsg button { min-height: 36px; border-radius: var(--radius-pill); padding: 6px 12px; }
     #sidePanel h2 { margin: 16px 0 12px; font-size: 1.1rem; }
     #sidePanel h2:first-of-type { margin-top: 0; }
-    [hidden] { display: none !important; }
     @media (max-width: 860px) { .layout { grid-template-columns: 1fr; } }
   </style>
 </head>
@@ -64,7 +58,7 @@
   <main>
     <header>
       <div class="nav">
-        <a href="/">← Back to library</a>
+        <a class="backLink" href="/">← Back to library</a>
         <h1 id="title">Video Player</h1>
       </div>
       <form method="post" action="/logout">
@@ -98,7 +92,7 @@
             <li><kbd>?</kbd> — Show this help</li>
           </ul>
         </details>
-        <p><a id="editLabels" href="#">Open full label editor ↗</a></p>
+        <p><a id="editLabels" href="#">Edit labels →</a></p>
         <h2>Chapters</h2>
         <div id="chapters"></div>
       </aside>
@@ -141,7 +135,18 @@
 
     function setLabelMsg(text, isError) {
       labelMsgEl.textContent = text;
-      labelMsgEl.style.color = isError ? '#ffb4b4' : '#8fb3ff';
+      labelMsgEl.classList.toggle('error', Boolean(isError));
+    }
+
+    function clearBoundaryNameInvalid() {
+      boundaryNameEl.removeAttribute('aria-invalid');
+      boundaryNameEl.removeAttribute('aria-describedby');
+    }
+
+    function setBoundaryNameInvalid() {
+      boundaryNameEl.setAttribute('aria-invalid', 'true');
+      boundaryNameEl.setAttribute('aria-describedby', 'labelMsg');
+      boundaryNameEl.focus();
     }
 
     // Capture the current playback position as a named chapter start and save it.
@@ -149,6 +154,7 @@
       const name = (boundaryNameEl.value || '').trim();
       if (!name) {
         setLabelMsg('Enter a group name first.', true);
+        setBoundaryNameInvalid();
         return;
       }
       const start = Math.round(video.currentTime || 0);
@@ -157,6 +163,7 @@
         labels.boundaries.push({ name: name, start: start });
         await saveLabels(labels);
         boundaryNameEl.value = '';
+        clearBoundaryNameInvalid();
         setLabelMsg('Marked "' + name + '" at ' + formatTime(start) + '.', false);
         await loadChapters();
       } catch (error) {
@@ -516,12 +523,38 @@
           return;
         }
         const [removed] = labels.boundaries.splice(index, 1);
+        const removedBoundary = { name: String((removed && removed.name) || ''), start: Number(removed && removed.start) || 0 };
         await saveLabels(labels);
-        setLabelMsg('Removed "' + removed.name + '" at ' + formatTime(Number(removed.start) || 0) + '.', false);
+        offerUndoRemove(removedBoundary, index);
         await loadChapters();
       } catch (error) {
         setLabelMsg('Could not remove chapter: ' + error.message, true);
       }
+    }
+
+    function offerUndoRemove(removed, index) {
+      labelMsgEl.textContent = '';
+      labelMsgEl.classList.remove('error');
+      const message = document.createElement('span');
+      message.textContent = 'Removed "' + removed.name + '" at ' + formatTime(removed.start) + '.';
+      const undo = document.createElement('button');
+      undo.type = 'button';
+      undo.textContent = 'Undo';
+      undo.setAttribute('aria-label', 'Undo removing ' + removed.name + ' chapter at ' + formatTime(removed.start));
+      undo.addEventListener('click', async () => {
+        undo.disabled = true;
+        try {
+          const labels = await fetchLabelsForEdit();
+          labels.boundaries.splice(Math.min(index, labels.boundaries.length), 0, { name: removed.name, start: removed.start });
+          await saveLabels(labels);
+          setLabelMsg('Restored "' + removed.name + '".', false);
+          await loadChapters();
+        } catch (error) {
+          undo.disabled = false;
+          setLabelMsg('Could not restore chapter: ' + error.message, true);
+        }
+      });
+      labelMsgEl.append(message, undo);
     }
 
     function formatTime(totalSeconds) {

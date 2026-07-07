@@ -1,0 +1,181 @@
+/*
+ * app.css — shared design tokens + base components for Large Video Streamer.
+ * Single source of truth for palette, typography, borders, focus, and buttons.
+ * Standardized on the "navy + Inter" system. All color pairs are WCAG-checked:
+ * text >= 4.5:1, non-text/UI boundaries >= 3:1 (1.4.11).
+ */
+
+:root {
+  color-scheme: dark;
+
+  /* Typography */
+  --font-sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  /* Surfaces */
+  --bg: #0b1020;          /* app background */
+  --bg-deep: #080d19;     /* deepest background (e.g. player) */
+  --surface: #151b2e;     /* cards / panels */
+  --surface-2: #1b2338;   /* rows / interactive tiles / raised chips */
+  --surface-input: #0b1120; /* form control fill */
+
+  /* Borders (>= 3:1 against surfaces for 1.4.11) */
+  --border: #6478a8;        /* default component boundary (4.3/3.9/3.6:1) */
+  --border-strong: #7386b8; /* form inputs (5.3/4.8/4.3:1) */
+
+  /* Text */
+  --text: #edf2ff;
+  --text-muted: #aab6d3;    /* 7.7-9.3:1 on surfaces */
+
+  /* Accent (periwinkle) */
+  --accent: #8fb3ff;          /* links / interactive text (7.5-9.1:1) */
+  --accent-strong: #7aa2ff;   /* hover border/emphasis */
+  --accent-solid: #8fb3ff;    /* filled CTA background */
+  --accent-solid-text: #0b1020; /* text on filled CTA (9.1:1) */
+
+  /* Status colors */
+  --error-text: #ffb4b4;      /* error text on dark (11.2:1) */
+  --success-bg: #14532d;
+  --success-text: #bbf7d0;    /* 7.5:1 */
+  --warn-bg: #713f12;
+  --warn-text: #fde68a;       /* 7.0:1 */
+
+  /* Danger (filled) */
+  --danger: #f87171;
+  --danger-text: #450a0a;     /* 5.8:1 on --danger */
+  --danger-soft-bg: #2a1620;
+  --danger-soft-border: #b06070;
+  --danger-soft-text: #ffd7df;
+
+  /* Secondary (subtle) button */
+  --secondary-bg: #192036;
+  --secondary-border: #3a4663;
+
+  /* Focus — single ring color app-wide */
+  --focus: #b8ccff;           /* 9.8-11.8:1 on surfaces */
+  --focus-halo: rgb(184 204 255 / 0.20);
+
+  /* Radius */
+  --radius-sm: .45rem;
+  --radius: .75rem;
+  --radius-lg: 1.25rem;
+  --radius-pill: 999px;
+
+  /* Elevation */
+  --shadow: 0 20px 80px rgb(0 0 0 / 0.30);
+
+  font-family: var(--font-sans);
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+}
+
+p { line-height: 1.6; }
+.text-muted { color: var(--text-muted); }
+.error-text { color: var(--error-text); }
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { color: var(--focus); }
+
+/* ---- Surfaces ---- */
+.card, .panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+/* ---- Buttons ---- */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: .35rem;
+  min-height: 44px;
+  min-width: 44px;
+  padding: .65rem 1rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  font: inherit;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: transform 150ms ease, border-color 150ms ease, background 150ms ease, filter 150ms ease;
+}
+.btn:hover { filter: brightness(1.06); }
+.btn:active { transform: translateY(1px); }
+.btn:disabled { opacity: .55; cursor: not-allowed; filter: none; transform: none; }
+
+.btn--primary { background: var(--accent-solid); color: var(--accent-solid-text); border-color: var(--accent-solid); }
+.btn--secondary { background: var(--secondary-bg); color: var(--text); border-color: var(--secondary-border); }
+.btn--secondary:hover { border-color: var(--accent); }
+.btn--danger { background: var(--danger); color: var(--danger-text); border-color: var(--danger); }
+.btn--pill { border-radius: var(--radius-pill); }
+
+/* ---- Form controls ---- */
+input, textarea, select {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 44px;
+  padding: .65rem .75rem;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-input);
+  color: var(--text);
+  font: inherit;
+  font-size: 1rem;
+}
+input::placeholder, textarea::placeholder { color: var(--text-muted); }
+textarea { min-height: 9rem; font-family: var(--font-mono); }
+input[type="checkbox"] { width: 1.35rem; min-height: 1.35rem; accent-color: var(--accent); }
+input[aria-invalid="true"], textarea[aria-invalid="true"] { border-color: var(--danger); }
+input:disabled, select:disabled, textarea:disabled { opacity: .55; cursor: not-allowed; }
+
+/* ---- Tables ---- */
+th, td { padding: .6rem; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
+th { color: var(--text-muted); font-size: .95rem; }
+
+/* ---- Single unified focus ring ---- */
+:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 3px;
+  box-shadow: 0 0 0 6px var(--focus-halo);
+}
+/* Legacy UA outline suppressed only where focus-visible applies */
+a:focus:not(:focus-visible),
+button:focus:not(:focus-visible),
+input:focus:not(:focus-visible),
+select:focus:not(:focus-visible),
+textarea:focus:not(:focus-visible) { outline: none; }
+
+/* ---- Status / save-state chips ---- */
+.status { color: var(--text-muted); }
+.status.error, .status.is-error { color: var(--error-text); }
+.save-state {
+  display: inline-flex; align-items: center;
+  min-height: 2rem; padding: .2rem .7rem;
+  border-radius: var(--radius-pill);
+  font-weight: 700; font-size: .9rem;
+}
+.save-state.saved { background: var(--success-bg); color: var(--success-text); }
+.save-state.dirty { background: var(--warn-bg); color: var(--warn-text); }
+
+/* ---- Helpers ---- */
+.sr-only {
+  position: absolute; width: 1px; height: 1px;
+  padding: 0; margin: -1px; overflow: hidden;
+  clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+}
+[hidden] { display: none !important; }
+
+@media (prefers-reduced-motion: reduce) {
+  .btn { transition: none; }
+  .btn:active { transform: none; }
+}

@@ -22,52 +22,52 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Labels - {{.Show}}</title>
+  <link rel="stylesheet" href="/static/app.css">
   <style>
-    :root { color-scheme: dark; font-family: system-ui, -apple-system, Segoe UI, sans-serif; }
     * { box-sizing: border-box; }
-    body { margin: 0; overflow-x: hidden; background: #0f172a; color: #e5e7eb; }
-    main { width: min(1100px, 100%); max-width: calc(100vw - 2rem); margin: 0 auto; padding: 1rem; }
-    h1, h2 { margin: 1rem 0 .75rem; }
+    body { overflow-x: hidden; }
+    main { width: min(1100px, calc(100% - 2rem)); margin: 0 auto; padding: 1rem 0 2rem; }
+    header { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; margin: 1rem 0; }
+    h1, h2 { margin: 0 0 .75rem; }
+    h1 { font-size: clamp(2rem, 5vw, 3.5rem); letter-spacing: -0.05em; }
     p { line-height: 1.5; }
-    section { margin: 1rem 0; padding: 1rem; border: 1px solid #334155; border-radius: .75rem; background: #111827; }
+    section { margin: 1rem 0; padding: 1rem; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); box-shadow: var(--shadow); }
     .table-wrap { position: relative; max-width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; border-radius: .5rem; }
+    .candidate-table-wrap { max-height: 60vh; overflow: auto; border: 1px solid var(--border); }
+    .candidate-table-wrap thead th { position: sticky; top: 0; z-index: 1; background: var(--surface); }
     table { width: 100%; min-width: 44rem; border-collapse: collapse; }
     table.boundary-table { min-width: 42rem; }
-    th, td { padding: .6rem; border-bottom: 1px solid #334155; text-align: left; vertical-align: top; }
-    th { color: #cbd5e1; font-size: .95rem; }
-    input, textarea, select { box-sizing: border-box; width: 100%; min-height: 44px; padding: .65rem; border: 1px solid #475569; border-radius: .4rem; background: #020617; color: #f8fafc; font: inherit; }
-    input[type="checkbox"] { width: 1.35rem; min-height: 1.35rem; accent-color: #38bdf8; }
-    textarea { min-height: 9rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
-    button { min-height: 44px; margin: 0; padding: .65rem .85rem; border: 0; border-radius: .45rem; background: #38bdf8; color: #082f49; font-weight: 700; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: .35rem; }
-    button.primary { background: #38bdf8; color: #082f49; box-shadow: 0 0 0 1px rgba(125, 211, 252, .25); }
-    button.danger { background: #f87171; color: #450a0a; }
-    button.secondary { background: #64748b; color: #f8fafc; }
+    input, textarea, select { padding: .65rem; }
+    textarea { min-height: 9rem; font-family: var(--font-mono); }
+    button { min-height: 44px; margin: 0; padding: .65rem .85rem; border: 1px solid transparent; border-radius: var(--radius-sm); background: var(--accent-solid); color: var(--accent-solid-text); font: inherit; font-weight: 700; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: .35rem; white-space: nowrap; }
+    button:hover { filter: brightness(1.06); }
+    button.primary { background: var(--accent-solid); color: var(--accent-solid-text); border-color: var(--accent-solid); }
+    button.danger { background: var(--danger); color: var(--danger-text); border-color: var(--danger); }
+    button.secondary { background: var(--secondary-bg); color: var(--text); border-color: var(--secondary-border); }
+    button.secondary:hover { border-color: var(--accent); }
     button:disabled, input:disabled, select:disabled { opacity: .55; cursor: not-allowed; }
-    button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible { outline: 3px solid #fde68a; outline-offset: 2px; }
-    .actions, .row-actions, .bulk-actions, .candidate-tools, .status-line { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
+    .actions, .row-actions, .bulk-actions, .candidate-tools, .status-line, .nav, .header-actions { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
     .actions { margin: .75rem 0; }
     .row-actions { min-width: 18rem; }
+    .candidate-table .row-actions { min-width: 15rem; }
     .candidate-tools, .bulk-actions { margin: .75rem 0; }
-    .candidate-tools label, .bulk-actions label { display: inline-flex; gap: .5rem; align-items: center; color: #cbd5e1; }
+    .candidate-tools label, .bulk-actions label { display: inline-flex; gap: .5rem; align-items: center; color: var(--text-muted); }
     .candidate-tools input[type="number"] { width: 7rem; }
     .bulk-actions input, .inline-name { width: 10rem; }
     .status-line { min-height: 1.8rem; }
-    .status { min-height: 1.4rem; color: #93c5fd; }
-    .save-state { display: inline-flex; align-items: center; min-height: 2rem; padding: .2rem .6rem; border-radius: 999px; font-weight: 700; font-size: .9rem; }
-    .save-state.saved { background: #14532d; color: #bbf7d0; }
-    .save-state.dirty { background: #713f12; color: #fde68a; }
-    .help { margin-top: 0; color: #cbd5e1; }
+    .status { min-height: 1.4rem; color: var(--accent); }
+    .help { margin-top: 0; color: var(--text-muted); }
     details.help { margin: .75rem 0; }
     details.help summary { cursor: pointer; min-height: 44px; display: inline-flex; align-items: center; font-weight: 700; }
     details.help ul { margin: .5rem 0 0; padding-left: 1.2rem; line-height: 1.7; }
-    kbd { background: #020617; border: 1px solid #475569; border-radius: .35rem; padding: .05rem .4rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .85em; }
+    kbd { background: var(--surface-input); border: 1px solid var(--border-strong); border-radius: .35rem; padding: .05rem .4rem; font-family: var(--font-mono); font-size: .85em; }
     .field-label { display: block; margin-bottom: .4rem; font-weight: 700; }
-    .grid { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(min(22rem, 100%), 1fr)); }
-    .empty-state { padding: 1rem; color: #cbd5e1; text-align: center; }
-    .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
-    video { width: 100%; max-height: 60vh; background: #000; border-radius: .5rem; }
+    .grid { display: grid; gap: 1rem; grid-template-columns: minmax(0, 1fr); }
+    .empty-state { padding: 1rem; color: var(--text-muted); text-align: center; }
+    video { width: 100%; max-height: 60vh; background: var(--bg-deep); border-radius: .5rem; }
     @media (max-width: 640px) {
-      main { max-width: 100%; padding: .75rem; }
+      main { width: 100%; max-width: 100%; padding: .75rem; }
+      header { display: grid; }
       section { padding: .75rem; }
       input, textarea, select { font-size: 16px; }
       .actions button, .candidate-tools label, .bulk-actions label, .bulk-actions button { flex: 1 1 12rem; }
@@ -79,7 +79,18 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
 </head>
 <body>
   <main>
-    <h1 id="page-title">Labels for {{.Show}}</h1>
+    <header>
+      <div>
+        <nav class="nav" aria-label="Label editor navigation">
+          <a href="/player?show={{.Show}}">← Back to player</a>
+          <a href="/">Back to library</a>
+        </nav>
+        <h1 id="page-title">Labels for {{.Show}}</h1>
+      </div>
+      <form class="header-actions" method="post" action="/logout">
+        <button type="submit" class="secondary">Sign out</button>
+      </form>
+    </header>
     <p class="status-line">
       <span id="save-state" class="save-state saved">Saved</span>
       <span class="status" id="status" role="status" aria-live="polite"></span>
@@ -143,8 +154,8 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
           <button id="bulk-reject" class="danger mutating-control" disabled>Reject selected</button>
         </div>
         <p class="help" id="candidate-count"></p>
-        <div class="table-wrap">
-          <table>
+        <div class="table-wrap candidate-table-wrap">
+          <table class="candidate-table">
             <thead><tr><th><input type="checkbox" id="select-all-candidates" aria-label="Select all visible pending candidates"></th><th>Time</th><th>Duration</th><th>Status</th><th>Actions</th></tr></thead>
             <tbody id="candidates"></tbody>
           </table>

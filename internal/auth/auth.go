@@ -25,15 +25,16 @@ var loginTemplate = template.Must(template.New("login").Parse(`<!doctype html>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Sign in</title>
+  <link rel="stylesheet" href="/static/app.css">
   <style>
-    :root { color-scheme: dark; font-family: system-ui, -apple-system, Segoe UI, sans-serif; }
-    body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #0f172a; color: #e5e7eb; }
-    main { box-sizing: border-box; width: min(92vw, 24rem); padding: 2rem; border-radius: 1rem; background: #111827; box-shadow: 0 1.5rem 4rem #02061799; }
+    body { display: grid; place-items: center; padding: 1rem; }
+    main { box-sizing: border-box; width: min(92vw, 24rem); padding: 2rem; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow); }
     h1 { margin: 0 0 1.5rem; font-size: 1.6rem; }
-    label { display: block; margin: 1rem 0 .4rem; color: #cbd5e1; }
-    input { box-sizing: border-box; width: 100%; min-height: 2.75rem; padding: .8rem; border: 1px solid #334155; border-radius: .55rem; background: #020617; color: #f8fafc; font-size: 1rem; }
-    button { width: 100%; min-height: 2.75rem; margin-top: 1.4rem; padding: .9rem; border: 0; border-radius: .55rem; background: #38bdf8; color: #082f49; font-size: 1rem; font-weight: 700; cursor: pointer; }
-    .error { padding: .75rem; border-radius: .55rem; background: #7f1d1d; color: #fecaca; }
+    label { display: block; margin: 1rem 0 .4rem; color: var(--text-muted); font-weight: 700; }
+    input { border-color: var(--border-strong); background: var(--surface-input); color: var(--text); }
+    button.btn { width: 100%; margin-top: 1.4rem; }
+    button.btn--primary:hover { background: var(--accent-strong); border-color: var(--accent-strong); filter: none; }
+    .error { margin: 0 0 1rem; padding: .75rem; border: 1px solid #d06a6a; border-radius: var(--radius-sm); background: #4a1116; color: #ffd7d7; }
   </style>
 </head>
 <body>
@@ -45,7 +46,7 @@ var loginTemplate = template.Must(template.New("login").Parse(`<!doctype html>
       <input id="user" name="user" type="text" autocomplete="username" value="{{.User}}"{{if .Error}} aria-describedby="login-error" aria-invalid="true"{{end}} required autofocus>
       <label for="pass">Password</label>
       <input id="pass" name="pass" type="password" autocomplete="current-password"{{if .Error}} aria-describedby="login-error" aria-invalid="true"{{end}} required>
-      <button type="submit">Continue</button>
+      <button class="btn btn--primary" type="submit">Continue</button>
     </form>
   </main>
 </body>
