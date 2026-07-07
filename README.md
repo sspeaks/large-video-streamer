@@ -26,7 +26,7 @@ The dev shell includes Go, `gopls`, `gotools`, `ffmpeg`, and `mkvtoolnix`.
 - `LOGIN_PASS` or `LOGIN_PASS_FILE`: required login password; file variant wins.
 - `COOKIE_SECRET` or `COOKIE_SECRET_FILE`: optional base64 string that decodes to at least 32 bytes; file variant wins. If omitted, the server generates and persists one under the state directory.
 
-Secret file values are read with trailing newlines removed.
+Secret file values are read with trailing newlines removed. Generated label sidecars are written under the state directory at `<StateDir>/labels/<video>.labels.json`, because `VIDEO_DIR` is read-only.
 
 ## Package layout and interface contract
 
@@ -43,7 +43,7 @@ Secret file values are read with trailing newlines removed.
   - `type Server struct`
   - `func New(cfg config.Config) *Server`
   - `func (s *Server) Handler() http.Handler`
-- `internal/labels`: owns label sidecars, UI/API routes, and timestamp import/export.
+- `internal/labels`: owns label sidecars stored under the writable state directory (`<StateDir>/labels/<video>.labels.json`), not next to read-only source videos, plus UI/API routes and timestamp import/export.
   - `type Boundary struct { Name string; Start float64 }`
   - `type Candidate struct { Time float64; Duration float64; Status string }`
   - `type VideoLabels struct { Video string; Boundaries []Boundary; Candidates []Candidate }`
@@ -102,6 +102,6 @@ The NixOS module creates `hlsDir` with service ownership before systemd applies
 `ReadWritePaths`, removes stale hidden `.*.tmp` HLS directories on service start,
 adds `supplementaryGroups` to both the system user and service process, and can
 manage source-video group access with `videoAccessGroup`. Source video files must
-still be readable by the service user or one of those groups.
+still be readable by the service user or one of those groups. Generated label sidecars are written to the systemd state directory because `videoDir` is read-only.
 
 Set `services.vidStreamer.noAuth = true` only for trusted/local deployments; it disables the credential file requirements. For local development, `nix run .#dev` starts the dev server.

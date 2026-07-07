@@ -12,7 +12,6 @@ import (
 )
 
 var (
-	bareWordRE  = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 	timestampRE = regexp.MustCompile(`^(\d+):(\d{2}):(\d{2})$`)
 )
 
@@ -34,22 +33,38 @@ func importTimestamps(r io.Reader) (VideoLabels, error) {
 		}
 
 		fields := strings.Fields(line)
-		if len(fields) == 1 && bareWordRE.MatchString(fields[0]) {
-			continue
+		ti := -1
+		for i, f := range fields {
+			if timestampRE.MatchString(f) {
+				ti = i
+				break
+			}
 		}
-		if len(fields) < 2 || len(fields) > 3 || !bareWordRE.MatchString(fields[0]) {
+		if ti == -1 {
+			if len(fields) == 1 {
+				continue
+			}
 			return VideoLabels{}, fmt.Errorf("invalid timestamp line %d: %q", lineNo, scanner.Text())
 		}
-		start, err := parseClockSeconds(fields[1])
+
+		name := strings.Join(fields[:ti], " ")
+		if name == "" {
+			return VideoLabels{}, fmt.Errorf("invalid timestamp line %d: %q", lineNo, scanner.Text())
+		}
+		tsFields := fields[ti:]
+		if len(tsFields) > 2 {
+			return VideoLabels{}, fmt.Errorf("invalid timestamp line %d: %q", lineNo, scanner.Text())
+		}
+		start, err := parseClockSeconds(tsFields[0])
 		if err != nil {
 			return VideoLabels{}, fmt.Errorf("invalid start timestamp on line %d: %w", lineNo, err)
 		}
-		if len(fields) == 3 {
-			if _, err := parseClockSeconds(fields[2]); err != nil {
+		if len(tsFields) == 2 {
+			if _, err := parseClockSeconds(tsFields[1]); err != nil {
 				return VideoLabels{}, fmt.Errorf("invalid stop timestamp on line %d: %w", lineNo, err)
 			}
 		}
-		labels.Boundaries = append(labels.Boundaries, Boundary{Name: fields[0], Start: start})
+		labels.Boundaries = append(labels.Boundaries, Boundary{Name: name, Start: start})
 	}
 	if err := scanner.Err(); err != nil {
 		return VideoLabels{}, err

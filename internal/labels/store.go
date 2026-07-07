@@ -9,7 +9,7 @@ import (
 )
 
 func (s *Store) sidecarPath(video string) string {
-	return filepath.Join(s.cfg.VideoDir, video+".labels.json")
+	return filepath.Join(s.cfg.StateDir, "labels", video+".labels.json")
 }
 
 func (s *Store) load(video string) (VideoLabels, error) {
@@ -41,8 +41,13 @@ func (s *Store) save(labels VideoLabels) error {
 	}
 	data = append(data, '\n')
 
+	dir := filepath.Join(s.cfg.StateDir, "labels")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+
 	target := s.sidecarPath(labels.Video)
-	tmp, err := os.CreateTemp(s.cfg.VideoDir, "."+labels.Video+".*.labels.json.tmp")
+	tmp, err := os.CreateTemp(dir, "."+labels.Video+".*.labels.json.tmp")
 	if err != nil {
 		return err
 	}

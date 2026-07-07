@@ -17,7 +17,7 @@ import (
 func TestRoutesSaveWritesSidecarAndChaptersVTT(t *testing.T) {
 	videoDir := t.TempDir()
 	hlsDir := t.TempDir()
-	store := New(config.Config{VideoDir: videoDir, HLSDir: hlsDir})
+	store := New(config.Config{VideoDir: videoDir, HLSDir: hlsDir, StateDir: t.TempDir()})
 	mux := authenticatedLabelMux(t, store)
 
 	body := `{"video":"ignored","boundaries":[{"name":"group-a","start":0},{"name":"group-b","start":90}],"candidates":[{"time":12.5,"duration":1.5,"status":"candidate"}]}`
@@ -44,7 +44,7 @@ func TestRoutesSaveWritesSidecarAndChaptersVTT(t *testing.T) {
 }
 
 func TestRoutesExportReturnsTimestampText(t *testing.T) {
-	store := New(config.Config{VideoDir: t.TempDir(), HLSDir: t.TempDir()})
+	store := New(config.Config{VideoDir: t.TempDir(), HLSDir: t.TempDir(), StateDir: t.TempDir()})
 	if err := store.Save(VideoLabels{Video: "sample_video", Boundaries: []Boundary{{Name: "group-b", Start: 120}, {Name: "group-a", Start: 60}}}); err != nil {
 		t.Fatalf("Save fixture: %v", err)
 	}
@@ -92,7 +92,7 @@ func TestRoutesRejectBoundaryNamesWithNewlines(t *testing.T) {
 func TestRoutesImportPersistsAndWritesChaptersVTT(t *testing.T) {
 	videoDir := t.TempDir()
 	hlsDir := t.TempDir()
-	store := New(config.Config{VideoDir: videoDir, HLSDir: hlsDir})
+	store := New(config.Config{VideoDir: videoDir, HLSDir: hlsDir, StateDir: t.TempDir()})
 	mux := authenticatedLabelMux(t, store)
 
 	res := serveLabelRequest(t, mux, http.MethodPost, "/labels/api/sample_video/import", "group-a 00:01:00\ngroup-b 00:02:00\n")
@@ -109,6 +109,59 @@ func TestRoutesImportPersistsAndWritesChaptersVTT(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(hlsDir, "sample_video", "chapters.vtt")); err != nil {
 		t.Fatalf("stat chapters.vtt: %v", err)
 	}
+}
+
+func TestRoutesImportExportImportRoundTripWithSpaces(t *testing.T) {
+	videoDir, hlsDir, stateDir := t.TempDir(), t.TempDir(), t.TempDir()
+	store := New(config.Config{VideoDir: videoDir, HLSDir: hlsDir, StateDir: stateDir})
+	mux := authenticatedLabelMux(t, store)
+
+	res := serveLabelRequest(t, mux, http.MethodPost, "/labels/api/demo/import", "Quartet Finals 00:07:43\ngroup-b 00:20:00\n")
+	if res.Code != http.StatusOK {
+		t.Fatalf("POST import status = %d, want %d; body %q", res.Code, http.StatusOK, res.Body.String())
+	}
+	var labels VideoLabels
+	if err := json.Unmarshal(res.Body.Bytes(), &labels); err != nil {
+		t.Fatalf("decode import response: %v", err)
+	}
+	assertHasBoundary(t, labels, Boundary{Name: "Quartet Finals", Start: 463})
+	assertHasBoundary(t, labels, Boundary{Name: "group-b", Start: 1200})
+
+	if _, err := os.Stat(filepath.Join(stateDir, "labels", "demo.labels.json")); err != nil {
+		t.Fatalf("stat state sidecar: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(videoDir, "demo.labels.json")); !os.IsNotExist(err) {
+		t.Fatalf("video dir sidecar exists or stat failed with unexpected error: %v", err)
+	}
+
+	res = serveLabelRequest(t, mux, http.MethodGet, "/labels/api/demo/export", "")
+	if res.Code != http.StatusOK {
+		t.Fatalf("GET export status = %d, want %d; body %q", res.Code, http.StatusOK, res.Body.String())
+	}
+	exported := res.Body.String()
+	if !strings.Contains(exported, "Quartet Finals 00:07:43") {
+		t.Fatalf("exported text = %q, want Quartet Finals timestamp", exported)
+	}
+
+	res = serveLabelRequest(t, mux, http.MethodPost, "/labels/api/demo/import", exported)
+	if res.Code != http.StatusOK {
+		t.Fatalf("POST re-import status = %d, want %d; body %q", res.Code, http.StatusOK, res.Body.String())
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &labels); err != nil {
+		t.Fatalf("decode re-import response: %v", err)
+	}
+	assertHasBoundary(t, labels, Boundary{Name: "Quartet Finals", Start: 463})
+	assertHasBoundary(t, labels, Boundary{Name: "group-b", Start: 1200})
+}
+
+func assertHasBoundary(t *testing.T, labels VideoLabels, want Boundary) {
+	t.Helper()
+	for _, got := range labels.Boundaries {
+		if got == want {
+			return
+		}
+	}
+	t.Fatalf("Boundaries = %#v, want to contain %#v", labels.Boundaries, want)
 }
 
 func authenticatedLabelMux(t *testing.T, store *Store) *http.ServeMux {

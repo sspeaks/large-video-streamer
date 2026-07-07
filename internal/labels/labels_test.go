@@ -55,7 +55,7 @@ func TestImportTimestampsParsesClipTrimmerExample(t *testing.T) {
 }
 
 func TestSaveLoadRoundTrip(t *testing.T) {
-	store := New(config.Config{VideoDir: t.TempDir()})
+	store := New(config.Config{VideoDir: t.TempDir(), StateDir: t.TempDir()})
 	want := VideoLabels{
 		Video: "sample_video",
 		Boundaries: []Boundary{
@@ -84,7 +84,7 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 }
 
 func TestLoadMissingSidecarReturnsFreshLabels(t *testing.T) {
-	store := New(config.Config{VideoDir: t.TempDir()})
+	store := New(config.Config{VideoDir: t.TempDir(), StateDir: t.TempDir()})
 	got, err := store.Load("missing_video")
 	if err != nil {
 		t.Fatalf("Load missing sidecar returned error: %v", err)

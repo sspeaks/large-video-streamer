@@ -77,7 +77,11 @@ func writeHLSShow(t *testing.T, cfg config.Config, show string) {
 
 func writeLabels(t *testing.T, cfg config.Config, show, json string) {
 	t.Helper()
-	if err := os.WriteFile(filepath.Join(cfg.VideoDir, show+".labels.json"), []byte(json), 0o644); err != nil {
+	dir := filepath.Join(cfg.StateDir, "labels")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, show+".labels.json"), []byte(json), 0o644); err != nil {
 		t.Fatal(err)
 	}
 }
