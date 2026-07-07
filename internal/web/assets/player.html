@@ -10,7 +10,7 @@
     main { width: min(1180px, calc(100% - 32px)); margin: 0 auto; padding: 32px 0 56px; }
     header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 24px; }
     .nav { display: grid; gap: 10px; }
-    .backLink { justify-self: start; font-weight: 700; border-radius: var(--radius-sm); }
+    .backLink { justify-self: start; }
     h1 { margin: 0; font-size: clamp(1.8rem, 4vw, 3rem); letter-spacing: -0.04em; }
     button { min-height: 44px; min-width: 44px; border: 1px solid var(--secondary-border); border-radius: var(--radius-pill); background: var(--secondary-bg); color: var(--text); padding: 10px 16px; cursor: pointer; white-space: nowrap; font: inherit; }
     button:hover { border-color: var(--accent); }
@@ -58,7 +58,7 @@
   <main>
     <header>
       <div class="nav">
-        <a class="backLink" href="/">← Back to library</a>
+        <a class="backLink btn btn--secondary btn--pill" href="/">← Back to library</a>
         <h1 id="title">Video Player</h1>
       </div>
       <form method="post" action="/logout">
