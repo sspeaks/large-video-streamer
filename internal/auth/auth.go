@@ -28,23 +28,23 @@ var loginTemplate = template.Must(template.New("login").Parse(`<!doctype html>
   <style>
     :root { color-scheme: dark; font-family: system-ui, -apple-system, Segoe UI, sans-serif; }
     body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #0f172a; color: #e5e7eb; }
-    main { width: min(92vw, 24rem); padding: 2rem; border-radius: 1rem; background: #111827; box-shadow: 0 1.5rem 4rem #02061799; }
+    main { box-sizing: border-box; width: min(92vw, 24rem); padding: 2rem; border-radius: 1rem; background: #111827; box-shadow: 0 1.5rem 4rem #02061799; }
     h1 { margin: 0 0 1.5rem; font-size: 1.6rem; }
     label { display: block; margin: 1rem 0 .4rem; color: #cbd5e1; }
-    input { box-sizing: border-box; width: 100%; padding: .8rem; border: 1px solid #334155; border-radius: .55rem; background: #020617; color: #f8fafc; }
-    button { width: 100%; margin-top: 1.4rem; padding: .85rem; border: 0; border-radius: .55rem; background: #38bdf8; color: #082f49; font-weight: 700; cursor: pointer; }
+    input { box-sizing: border-box; width: 100%; min-height: 2.75rem; padding: .8rem; border: 1px solid #334155; border-radius: .55rem; background: #020617; color: #f8fafc; font-size: 1rem; }
+    button { width: 100%; min-height: 2.75rem; margin-top: 1.4rem; padding: .9rem; border: 0; border-radius: .55rem; background: #38bdf8; color: #082f49; font-size: 1rem; font-weight: 700; cursor: pointer; }
     .error { padding: .75rem; border-radius: .55rem; background: #7f1d1d; color: #fecaca; }
   </style>
 </head>
 <body>
   <main>
     <h1>Sign in</h1>
-    {{if .Error}}<p class="error">{{.Error}}</p>{{end}}
+    {{if .Error}}<p class="error" id="login-error" role="alert">{{.Error}}</p>{{end}}
     <form method="post" action="/login">
       <label for="user">Username</label>
-      <input id="user" name="user" type="text" autocomplete="username" required autofocus>
+      <input id="user" name="user" type="text" autocomplete="username" value="{{.User}}"{{if .Error}} aria-describedby="login-error" aria-invalid="true"{{end}} required autofocus>
       <label for="pass">Password</label>
-      <input id="pass" name="pass" type="password" autocomplete="current-password" required>
+      <input id="pass" name="pass" type="password" autocomplete="current-password"{{if .Error}} aria-describedby="login-error" aria-invalid="true"{{end}} required>
       <button type="submit">Continue</button>
     </form>
   </main>
@@ -198,17 +198,18 @@ func (a *Authenticator) handleLoginGet(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/", http.StatusFound)
 		return
 	}
-	renderLogin(w, http.StatusOK, "")
+	renderLogin(w, http.StatusOK, "", "")
 }
 
 func (a *Authenticator) handleLoginPost(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	if err := r.ParseForm(); err != nil {
-		renderLogin(w, http.StatusUnauthorized, "Invalid username or password")
+		renderLogin(w, http.StatusUnauthorized, "Invalid username or password", r.FormValue("user"))
 		return
 	}
 
-	userMatch := subtle.ConstantTimeCompare([]byte(r.FormValue("user")), []byte(a.cfg.LoginUser))
+	user := r.FormValue("user")
+	userMatch := subtle.ConstantTimeCompare([]byte(user), []byte(a.cfg.LoginUser))
 	passMatch := subtle.ConstantTimeCompare([]byte(r.FormValue("pass")), []byte(a.cfg.LoginPass))
 	if userMatch == 1 && passMatch == 1 {
 		token, err := a.newToken(a.cfg.LoginUser)
@@ -221,7 +222,7 @@ func (a *Authenticator) handleLoginPost(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	renderLogin(w, http.StatusUnauthorized, "Invalid username or password")
+	renderLogin(w, http.StatusUnauthorized, "Invalid username or password", user)
 }
 
 func (a *Authenticator) handleLogoutPost(w http.ResponseWriter, r *http.Request) {
@@ -229,10 +230,13 @@ func (a *Authenticator) handleLogoutPost(w http.ResponseWriter, r *http.Request)
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
 }
 
-func renderLogin(w http.ResponseWriter, status int, message string) {
+func renderLogin(w http.ResponseWriter, status int, message, user string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
-	if err := loginTemplate.Execute(w, struct{ Error string }{Error: message}); err != nil {
+	if err := loginTemplate.Execute(w, struct {
+		Error string
+		User  string
+	}{Error: message, User: user}); err != nil {
 		http.Error(w, "failed to render login", http.StatusInternalServerError)
 	}
 }

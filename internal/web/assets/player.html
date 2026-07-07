@@ -10,11 +10,16 @@
     main { width: min(1180px, calc(100% - 32px)); margin: 0 auto; padding: 32px 0 56px; }
     header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 24px; }
     .nav { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
-    a { color: #9bbcff; text-decoration: none; }
-    a:hover, a:focus-visible { color: #c8d8ff; outline: none; }
+    a { color: #9bbcff; text-decoration: none; border-radius: 6px; }
+    a:hover { color: #c8d8ff; }
+    a:focus-visible, button:focus-visible, .chapter:focus-visible {
+      outline: 3px solid #ffd166;
+      outline-offset: 3px;
+      box-shadow: 0 0 0 6px rgb(255 209 102 / 0.18);
+    }
     h1 { margin: 0; font-size: clamp(1.8rem, 4vw, 3rem); letter-spacing: -0.04em; }
-    button { border: 1px solid #3a4663; border-radius: 999px; background: #192036; color: #edf2ff; padding: 10px 16px; cursor: pointer; }
-    button:hover, button:focus-visible { border-color: #8fb3ff; outline: none; }
+    button { min-height: 44px; min-width: 44px; border: 1px solid #3a4663; border-radius: 999px; background: #192036; color: #edf2ff; padding: 10px 16px; cursor: pointer; white-space: nowrap; }
+    button:hover { border-color: #8fb3ff; }
     .layout { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 24px; align-items: start; }
     .panel { background: #12182a; border: 1px solid #25304a; border-radius: 20px; padding: 18px; box-shadow: 0 20px 80px rgb(0 0 0 / 0.28); }
     video { display: block; width: 100%; max-height: 72vh; background: #000; border-radius: 14px; }
@@ -22,12 +27,18 @@
     #message.error { color: #ffb4b4; }
     #chaptersPanel h2 { margin: 0 0 12px; font-size: 1.1rem; }
     #chapters { display: grid; gap: 8px; }
-    .chapter { width: 100%; text-align: left; border-radius: 12px; border-color: #2a3654; background: #1a2237; padding: 12px 14px; }
+    .chapterRow { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: stretch; }
+    .chapter { width: 100%; text-align: left; border-radius: 12px; border-color: #2a3654; background: #1a2237; padding: 12px 14px; white-space: normal; }
     .chapter small { display: block; color: #9fb0d0; margin-top: 4px; }
     .chapter.active { border-color: #8fb3ff; background: #223154; }
+    .removeChapter { border-radius: 12px; border-color: #694154; background: #2a1620; color: #ffd7df; }
+    .removeChapter:hover { border-color: #ffb4c2; }
     .hint { color: #9fb0d0; font-size: 0.9rem; line-height: 1.5; margin: 0 0 12px; }
-    .labelControls { display: flex; gap: 8px; flex-wrap: wrap; }
-    .labelControls input { flex: 1; min-width: 140px; padding: 10px 12px; border-radius: 12px; border: 1px solid #3a4663; background: #0b1120; color: #edf2ff; }
+    .labelControls { display: flex; align-items: end; gap: 8px; flex-wrap: wrap; }
+    .fieldGroup { flex: 1 1 180px; display: grid; gap: 6px; }
+    .fieldGroup label { font-size: 0.9rem; font-weight: 700; color: #edf2ff; }
+    .labelControls input { min-height: 44px; box-sizing: border-box; width: 100%; min-width: 140px; padding: 10px 12px; border-radius: 12px; border: 1px solid #3a4663; background: #0b1120; color: #edf2ff; font-size: 1rem; }
+    .labelControls input:focus-visible { outline: 3px solid #ffd166; outline-offset: 3px; border-color: #8fb3ff; box-shadow: 0 0 0 6px rgb(255 209 102 / 0.18); }
     .labelMsg { min-height: 1.2rem; font-size: 0.9rem; margin: 8px 0; color: #8fb3ff; }
     #sidePanel h2 { margin: 16px 0 12px; font-size: 1.1rem; }
     #sidePanel h2:first-of-type { margin-top: 0; }
@@ -57,7 +68,10 @@
         <h2>Label this show</h2>
         <p class="hint">Play to where a group takes the stage, type a name, then mark the start — it becomes a chapter anyone can jump to.</p>
         <div class="labelControls">
-          <input id="boundaryName" type="text" placeholder="Group name (e.g. group-a)" aria-label="Boundary name">
+          <div class="fieldGroup">
+            <label for="boundaryName">Boundary name</label>
+            <input id="boundaryName" type="text" placeholder="Group name (e.g. group-a)">
+          </div>
           <button id="markBtn" type="button">Mark start here</button>
         </div>
         <div id="labelMsg" class="labelMsg" role="status"></div>
@@ -82,17 +96,22 @@
     const labelMsgEl = document.getElementById('labelMsg');
     const editLabelsEl = document.getElementById('editLabels');
     let chapterCues = [];
+    let nativeChapterTrack = null;
+    video.setAttribute('aria-label', displayName(show));
 
     if (!show) {
       setMessage('Choose a show from the library before opening the player.', true);
     } else {
-      title.textContent = show;
+      const showTitle = displayName(show);
+      title.textContent = showTitle;
       const playlistURL = '/hls/' + showPath + '/playlist.m3u8';
       const chaptersURL = '/hls/' + showPath + '/chapters.vtt';
       chaptersPanel.hidden = false;
       editLabelsEl.href = '/labels/' + showPath;
       document.getElementById('markBtn').addEventListener('click', markBoundary);
-      addChapterTrack(chaptersURL);
+      // Keep the derived chapters.vtt path discoverable for tests/server parity;
+      // live native markers are built from the fetched label boundaries below.
+      void chaptersURL;
       loadVideo(playlistURL);
       loadChapters();
     }
@@ -111,33 +130,43 @@
       }
       const start = Math.round(video.currentTime || 0);
       try {
-        const current = await fetch('/labels/api/' + showPath, { credentials: 'same-origin' });
-        if (current.status === 401 || current.status === 403) {
-          location.href = '/login';
-          return;
-        }
-        const labels = current.ok ? await current.json() : { video: show, boundaries: [], candidates: [] };
-        labels.video = show;
-        labels.boundaries = labels.boundaries || [];
+        const labels = await fetchLabelsForEdit();
         labels.boundaries.push({ name: name, start: start });
-        const saved = await fetch('/labels/api/' + showPath, {
-          method: 'POST',
-          credentials: 'same-origin',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(labels)
-        });
-        if (saved.status === 401 || saved.status === 403) {
-          location.href = '/login';
-          return;
-        }
-        if (!saved.ok) {
-          throw new Error(await saved.text());
-        }
+        await saveLabels(labels);
         boundaryNameEl.value = '';
         setLabelMsg('Marked "' + name + '" at ' + formatTime(start) + '.', false);
-        loadChapters();
+        await loadChapters();
       } catch (error) {
         setLabelMsg('Could not save: ' + error.message, true);
+      }
+    }
+
+    async function fetchLabelsForEdit() {
+      const current = await fetch('/labels/api/' + showPath, { credentials: 'same-origin' });
+      if (current.status === 401 || current.status === 403) {
+        location.href = '/login';
+        throw new Error('Redirecting to login.');
+      }
+      const labels = current.ok ? await current.json() : { video: show, boundaries: [], candidates: [] };
+      labels.video = show;
+      labels.boundaries = labels.boundaries || [];
+      labels.candidates = labels.candidates || [];
+      return labels;
+    }
+
+    async function saveLabels(labels) {
+      const saved = await fetch('/labels/api/' + showPath, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(labels)
+      });
+      if (saved.status === 401 || saved.status === 403) {
+        location.href = '/login';
+        throw new Error('Redirecting to login.');
+      }
+      if (!saved.ok) {
+        throw new Error(await saved.text());
       }
     }
 
@@ -146,12 +175,40 @@
       message.classList.toggle('error', Boolean(isError));
     }
 
-    function addChapterTrack(chaptersURL) {
-      const track = document.createElement('track');
-      track.kind = 'chapters';
-      track.src = chaptersURL;
-      track.default = true;
-      video.append(track);
+    function rebuildNativeChapterTrack(cues) {
+      if (cues.length === 0 && !nativeChapterTrack) {
+        return;
+      }
+      if (!window.VTTCue) {
+        return;
+      }
+      const track = ensureNativeChapterTrack();
+      if (!track) {
+        return;
+      }
+      if (track.cues) {
+        for (let i = track.cues.length - 1; i >= 0; i--) {
+          track.removeCue(track.cues[i]);
+        }
+      }
+      for (const cue of cues) {
+        if (cue.end <= cue.start) {
+          continue;
+        }
+        track.addCue(new window.VTTCue(cue.start, cue.end, cue.label));
+      }
+    }
+
+    function ensureNativeChapterTrack() {
+      if (nativeChapterTrack) {
+        return nativeChapterTrack;
+      }
+      if (!video.addTextTrack) {
+        return null;
+      }
+      nativeChapterTrack = video.addTextTrack('chapters', 'Chapters', 'en');
+      nativeChapterTrack.mode = 'hidden';
+      return nativeChapterTrack;
     }
 
     function loadVideo(playlistURL) {
@@ -201,14 +258,19 @@
           return;
         }
         if (!response.ok) {
-          renderChapters([]);
+          chapterCues = [];
+          renderChapters(chapterCues);
+          rebuildNativeChapterTrack(chapterCues);
           return;
         }
         const data = await response.json();
         chapterCues = boundariesToCues((data && data.boundaries) || []);
         renderChapters(chapterCues);
+        rebuildNativeChapterTrack(chapterCues);
       } catch (error) {
-        renderChapters([]);
+        chapterCues = [];
+        renderChapters(chapterCues);
+        rebuildNativeChapterTrack(chapterCues);
       }
     }
 
@@ -217,14 +279,25 @@
     // in the ephemeral HLS dir has been cleaned up.
     function boundariesToCues(boundaries) {
       const sorted = (boundaries || [])
-        .filter(b => b && b.name)
-        .map(b => ({ start: Number(b.start) || 0, name: String(b.name) }))
+        .map((b, index) => ({ boundaryIndex: index, start: Math.max(0, Number(b && b.start) || 0), name: String((b && b.name) || '') }))
+        .filter(b => b.name)
         .sort((a, b) => a.start - b.start);
       return sorted.map((b, i) => ({
         start: b.start,
-        end: i + 1 < sorted.length ? sorted[i + 1].start : b.start + 600,
-        label: b.name
+        end: Math.max(b.start + 0.001, i + 1 < sorted.length ? sorted[i + 1].start : b.start + 600),
+        label: b.name,
+        boundaryIndex: b.boundaryIndex
       }));
+    }
+
+    function displayName(slug) {
+      return (slug || '')
+        .replace(/[_-]+/g, ' ')
+        .trim()
+        .split(/\s+/)
+        .filter(Boolean)
+        .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+        .join(' ') || 'Video Player';
     }
 
     function renderChapters(cues) {
@@ -237,6 +310,8 @@
         return;
       }
       for (const cue of cues) {
+        const row = document.createElement('div');
+        row.className = 'chapterRow';
         const button = document.createElement('button');
         button.type = 'button';
         button.className = 'chapter';
@@ -245,10 +320,48 @@
         button.querySelector('span').textContent = cue.label;
         button.querySelector('small').textContent = formatTime(cue.start);
         button.addEventListener('click', () => {
+          const wasPlaying = !video.paused;
           video.currentTime = cue.start;
-          video.play().catch(() => {});
+          if (wasPlaying) {
+            video.play().catch(() => {});
+          }
         });
-        chaptersEl.append(button);
+        const removeButton = document.createElement('button');
+        removeButton.type = 'button';
+        removeButton.className = 'removeChapter';
+        removeButton.textContent = 'Remove';
+        removeButton.setAttribute('aria-label', 'Remove ' + cue.label + ' chapter at ' + formatTime(cue.start));
+        removeButton.addEventListener('click', () => removeChapter(cue));
+        row.append(button, removeButton);
+        chaptersEl.append(row);
+      }
+    }
+
+    async function removeChapter(cue) {
+      try {
+        const labels = await fetchLabelsForEdit();
+        let index = labels.boundaries.findIndex((boundary, i) =>
+          i === cue.boundaryIndex &&
+          String((boundary && boundary.name) || '') === cue.label &&
+          Number(boundary && boundary.start) === cue.start
+        );
+        if (index < 0) {
+          index = labels.boundaries.findIndex(boundary =>
+            String((boundary && boundary.name) || '') === cue.label &&
+            Number(boundary && boundary.start) === cue.start
+          );
+        }
+        if (index < 0) {
+          setLabelMsg('Could not find "' + cue.label + '" to remove. Refreshing chapters…', true);
+          await loadChapters();
+          return;
+        }
+        const [removed] = labels.boundaries.splice(index, 1);
+        await saveLabels(labels);
+        setLabelMsg('Removed "' + removed.name + '" at ' + formatTime(Number(removed.start) || 0) + '.', false);
+        await loadChapters();
+      } catch (error) {
+        setLabelMsg('Could not remove chapter: ' + error.message, true);
       }
     }
 

@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"io"
 	"log"
 	"net/http"
 
@@ -45,6 +46,9 @@ func main() {
 	})))
 	mux.Handle("GET /player", a.RequirePage(web.Player()))
 	mux.Handle("GET /{$}", a.RequirePage(web.Index()))
+	// Public favicon so every page (including /login) gets a 200 instead of a
+	// noisy 404, without embedding a <link> in each page's <head>.
+	mux.HandleFunc("GET /favicon.ico", handleFavicon)
 	if cfg.SegmentOnStart {
 		go func() {
 			if err := segment.SegmentAll(cfg); err != nil {
@@ -54,4 +58,14 @@ func main() {
 	}
 	log.Printf("vid-streamer listening on %s (videoDir=%s hlsDir=%s)", cfg.ListenAddr, cfg.VideoDir, cfg.HLSDir)
 	log.Fatal(http.ListenAndServe(cfg.ListenAddr, mux))
+}
+
+// faviconSVG is a small inline app icon (dark rounded tile + play glyph) served
+// at /favicon.ico so browsers stop logging a 404 on every page load.
+const faviconSVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="7" fill="#0b1020"/><path d="M13 10l9 6-9 6z" fill="#8fb3ff"/></svg>`
+
+func handleFavicon(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "image/svg+xml")
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	_, _ = io.WriteString(w, faviconSVG)
 }

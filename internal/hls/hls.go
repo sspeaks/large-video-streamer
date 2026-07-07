@@ -48,6 +48,14 @@ func (s *Server) Handler() http.Handler {
 		name := filepath.Join(s.cfg.HLSDir, filepath.FromSlash(rel))
 		file, err := os.Open(name)
 		if err != nil {
+			// A show with no saved chapters yet has no chapters.vtt on disk.
+			// Serve an empty (but valid) cue list so the native <track> never
+			// 404s, instead of surfacing a console error to the viewer.
+			if path.Base(rel) == "chapters.vtt" {
+				setMediaHeaders(w.Header(), contentType)
+				_, _ = w.Write([]byte("WEBVTT\n\n"))
+				return
+			}
 			http.NotFound(w, r)
 			return
 		}

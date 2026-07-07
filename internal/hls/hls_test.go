@@ -146,6 +146,48 @@ func TestListShowsMarksReadyAndProcessing(t *testing.T) {
 	}
 }
 
+func TestHandlerServesEmptyChaptersWhenMissing(t *testing.T) {
+	root := buildTestHLSDir(t)
+	srv := New(config.Config{HLSDir: root})
+
+	// show1 has no chapters.vtt on disk (a show with no saved chapters yet).
+	// It must return 200 with a valid empty cue list, not a 404, so the
+	// player's native <track> never surfaces a console error.
+	req := httptest.NewRequest(http.MethodGet, "/hls/show1/chapters.vtt", nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("missing chapters.vtt status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "text/vtt" {
+		t.Fatalf("Content-Type = %q, want text/vtt", ct)
+	}
+	if body := rec.Body.String(); body != "WEBVTT\n\n" {
+		t.Fatalf("body = %q, want %q", body, "WEBVTT\n\n")
+	}
+}
+
+func TestHandlerServesExistingChaptersFile(t *testing.T) {
+	root := buildTestHLSDir(t)
+	want := "WEBVTT\n\n1\n00:00:05.000 --> 00:00:10.000\ngroup-a\n\n"
+	if err := os.WriteFile(filepath.Join(root, "show1", "chapters.vtt"), []byte(want), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	srv := New(config.Config{HLSDir: root})
+
+	req := httptest.NewRequest(http.MethodGet, "/hls/show1/chapters.vtt", nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("existing chapters.vtt status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if body := rec.Body.String(); body != want {
+		t.Fatalf("body = %q, want %q", body, want)
+	}
+}
+
 func buildTestHLSDir(t *testing.T) string {
 	t.Helper()
 	root := "hls-test-root"
