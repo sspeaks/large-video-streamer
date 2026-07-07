@@ -73,6 +73,26 @@ func TestPlayerIncludesKeyboardShortcuts(t *testing.T) {
 	}
 }
 
+func TestPlayerShowsChaptersBelowVideoWithoutRemove(t *testing.T) {
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/player?show=demo", nil)
+
+	Player().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("Player() status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	body := rec.Body.String()
+	for _, want := range []string{`id="chaptersPanel"`, "shareChapter"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("Player() body does not contain %q for the chapters section", want)
+		}
+	}
+	if strings.Contains(body, "removeChapter") {
+		t.Fatalf("Player() body still references removeChapter; delete is handled on the labels page")
+	}
+}
+
 func TestHandlerServesVendoredHLS(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/static/hls.min.js", nil)
