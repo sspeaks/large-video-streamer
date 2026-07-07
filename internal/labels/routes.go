@@ -38,6 +38,7 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
     .actions { display: flex; flex-wrap: wrap; gap: .4rem; margin: .75rem 0; }
     .status { min-height: 1.4rem; color: #93c5fd; }
     .grid { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(22rem, 1fr)); }
+    video { width: 100%; max-height: 60vh; background: #000; border-radius: .5rem; }
   </style>
 </head>
 <body>
@@ -51,6 +52,11 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
       <button id="import">Import timestamps</button>
       <button id="detect" class="secondary">Detect silences</button>
     </div>
+    <section>
+      <h2>Preview</h2>
+      <video id="preview" controls playsinline></video>
+      <p class="status" id="previewStatus">Use “Preview” on any boundary or candidate to jump the video to that moment.</p>
+    </section>
     <div class="grid">
       <section>
         <h2>Boundaries</h2>
@@ -72,12 +78,35 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
       <textarea id="timestamps" placeholder="group-a 00:01:00&#10;group-b 00:02:00"></textarea>
     </section>
   </main>
+  <script src="/static/hls.min.js"></script>
   <script>
     const show = {{ .Show }};
     const api = '/labels/api/' + encodeURIComponent(show);
     let labels = { video: show, boundaries: [], candidates: [] };
     const statusEl = document.getElementById('status');
     const setStatus = (message) => { statusEl.textContent = message; };
+    const preview = document.getElementById('preview');
+    const previewStatus = document.getElementById('previewStatus');
+    const playlistURL = '/hls/' + encodeURIComponent(show) + '/playlist.m3u8';
+    (function initPreview() {
+      if (window.Hls && Hls.isSupported()) {
+        const hls = new Hls({ xhrSetup: (xhr) => { xhr.withCredentials = true; } });
+        hls.loadSource(playlistURL);
+        hls.attachMedia(preview);
+        hls.on(Hls.Events.ERROR, (event, data) => {
+          if (data && data.fatal) { previewStatus.textContent = 'Preview unavailable — is this video segmented yet?'; }
+        });
+      } else if (preview.canPlayType('application/vnd.apple.mpegurl')) {
+        preview.src = playlistURL;
+      } else {
+        previewStatus.textContent = 'This browser cannot play HLS video.';
+      }
+    })();
+    const seekPreview = (seconds) => {
+      preview.currentTime = Math.max(0, Number(seconds) || 0);
+      preview.play().catch(() => {});
+      preview.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    };
     const secondsToClock = (seconds) => {
       seconds = Math.max(0, Math.round(Number(seconds) || 0));
       const h = Math.floor(seconds / 3600);
@@ -95,19 +124,21 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
       boundaries.innerHTML = '';
       (labels.boundaries || []).forEach((boundary, index) => {
         const row = document.createElement('tr');
-        row.innerHTML = '<td><input value="' + escapeAttr(boundary.name || '') + '" aria-label="Boundary name"></td><td><input value="' + secondsToClock(boundary.start) + '" aria-label="Boundary start"></td><td><button class="danger">Delete</button></td>';
+        row.innerHTML = '<td><input value="' + escapeAttr(boundary.name || '') + '" aria-label="Boundary name"></td><td><input value="' + secondsToClock(boundary.start) + '" aria-label="Boundary start"></td><td><button class="secondary preview">Preview</button><button class="danger delete">Delete</button></td>';
         const inputs = row.querySelectorAll('input');
         inputs[0].addEventListener('input', () => boundary.name = inputs[0].value);
         inputs[1].addEventListener('input', () => { try { boundary.start = clockToSeconds(inputs[1].value); setStatus(''); } catch (err) { setStatus(err.message); } });
-        row.querySelector('button').addEventListener('click', () => { labels.boundaries.splice(index, 1); render(); });
+        row.querySelector('.preview').addEventListener('click', () => seekPreview(boundary.start));
+        row.querySelector('.delete').addEventListener('click', () => { labels.boundaries.splice(index, 1); render(); });
         boundaries.appendChild(row);
       });
       const candidates = document.getElementById('candidates');
       candidates.innerHTML = '';
       (labels.candidates || []).forEach((candidate) => {
         const row = document.createElement('tr');
-        row.innerHTML = '<td>' + secondsToClock(candidate.time) + '</td><td>' + Number(candidate.duration || 0).toFixed(2) + 's</td><td>' + escapeText(candidate.status || 'candidate') + '</td><td><button>Promote</button><button class="danger">Reject</button></td>';
-        row.querySelector('button').addEventListener('click', () => {
+        row.innerHTML = '<td>' + secondsToClock(candidate.time) + '</td><td>' + Number(candidate.duration || 0).toFixed(2) + 's</td><td>' + escapeText(candidate.status || 'candidate') + '</td><td><button class="secondary preview">Preview</button><button class="promote">Promote</button><button class="danger reject">Reject</button></td>';
+        row.querySelector('.preview').addEventListener('click', () => seekPreview(candidate.time));
+        row.querySelector('.promote').addEventListener('click', () => {
           const name = prompt('Boundary name', 'group-a');
           if (name) {
             labels.boundaries.push({ name, start: Number(candidate.time) || 0 });
@@ -115,7 +146,7 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
             render();
           }
         });
-        row.querySelector('.danger').addEventListener('click', () => { candidate.status = 'rejected'; render(); });
+        row.querySelector('.reject').addEventListener('click', () => { candidate.status = 'rejected'; render(); });
         candidates.appendChild(row);
       });
     };
