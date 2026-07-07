@@ -83,8 +83,9 @@ The flake exports `nixosModules.vidStreamer` and `nixosModules.default`. Add it 
             enable = true;
             package = vid-streamer.packages.x86_64-linux.default;
             videoDir = "/srv/videos";
-            # Optional: when /srv/videos is group-readable by another group.
-            supplementaryGroups = [ "users" ];
+            # Optional: grants the service group access and applies ACLs so
+            # top-level .mkv files in /srv/videos are group-readable.
+            videoAccessGroup = "users";
             listenAddr = "127.0.0.1:8080";
             loginUserFile = "/run/secrets/vid-streamer-user";
             loginPassFile = "/run/secrets/vid-streamer-pass";
@@ -99,7 +100,8 @@ The flake exports `nixosModules.vidStreamer` and `nixosModules.default`. Add it 
 
 The NixOS module creates `hlsDir` with service ownership before systemd applies
 `ReadWritePaths`, removes stale hidden `.*.tmp` HLS directories on service start,
-and adds `supplementaryGroups` to both the system user and service process. Source
-video files must still be readable by the service user or one of those groups.
+adds `supplementaryGroups` to both the system user and service process, and can
+manage source-video group access with `videoAccessGroup`. Source video files must
+still be readable by the service user or one of those groups.
 
 Set `services.vidStreamer.noAuth = true` only for trusted/local deployments; it disables the credential file requirements. For local development, `nix run .#dev` starts the dev server.

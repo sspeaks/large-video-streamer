@@ -6,6 +6,9 @@ let
   defaultUser = "vid-streamer";
   defaultGroup = "vid-streamer";
   listenPort = lib.toInt (lib.last (lib.splitString ":" cfg.listenAddr));
+  effectiveSupplementaryGroups = lib.unique (
+    cfg.supplementaryGroups ++ lib.optional (cfg.videoAccessGroup != null) cfg.videoAccessGroup
+  );
 in
 {
   options.services.vidStreamer = {
@@ -62,6 +65,17 @@ in
       '';
     };
 
+    videoAccessGroup = lib.mkOption {
+      type = types.nullOr types.str;
+      default = null;
+      description = ''
+        Optional group that should be able to read videos in videoDir. When set,
+        the module grants the service this supplementary group and applies
+        tmpfiles ACL rules so the group can traverse videoDir and read top-level
+        .mkv files, including newly created files that inherit the default ACL.
+      '';
+    };
+
     noAuth = lib.mkOption {
       type = types.bool;
       default = false;
@@ -115,7 +129,7 @@ in
       ${cfg.user} = {
         isSystemUser = true;
         group = cfg.group;
-        extraGroups = cfg.supplementaryGroups;
+        extraGroups = effectiveSupplementaryGroups;
       };
     };
 
@@ -125,6 +139,10 @@ in
 
     systemd.tmpfiles.rules = [
       "d ${toString cfg.hlsDir} 0750 ${cfg.user} ${cfg.group} -"
+    ] ++ lib.optionals (cfg.videoAccessGroup != null) [
+      "d ${toString cfg.videoDir} 0750 - ${cfg.videoAccessGroup} -"
+      "a+ ${toString cfg.videoDir} - - - - g:${cfg.videoAccessGroup}:rx,d:g:${cfg.videoAccessGroup}:rx,d:m:rx"
+      "a+ ${toString cfg.videoDir}/*.mkv - - - - g:${cfg.videoAccessGroup}:r--"
     ];
 
     systemd.services.vid-streamer = {
@@ -163,7 +181,7 @@ in
         ExecStart = lib.getExe cfg.package;
         User = cfg.user;
         Group = cfg.group;
-        SupplementaryGroups = cfg.supplementaryGroups;
+        SupplementaryGroups = effectiveSupplementaryGroups;
         StateDirectory = "vid-streamer";
         Restart = "on-failure";
         RestartSec = "5s";
