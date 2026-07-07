@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/sspeaks/large-video-streamer/internal/config"
@@ -216,4 +217,202 @@ func buildTestHLSDir(t *testing.T) string {
 		}
 	}
 	return root
+}
+
+func TestBuildChapterPlaylistMidVideoChapter(t *testing.T) {
+	root := buildChapterTestHLSDir(t, "show1")
+	srv := New(config.Config{HLSDir: root})
+
+	playlist, segments, startOffset, endOffset, total, err := srv.BuildChapterPlaylist("show1", 6, 18)
+	if err != nil {
+		t.Fatalf("BuildChapterPlaylist returned error: %v", err)
+	}
+	assertSegments(t, segments, []string{"seg_0001.ts", "seg_0002.ts"})
+	if !closeFloat(startOffset, 0) {
+		t.Fatalf("startOffset = %v, want 0", startOffset)
+	}
+	if !closeFloat(endOffset, 12) {
+		t.Fatalf("endOffset = %v, want 12", endOffset)
+	}
+	if !closeFloat(total, 30) {
+		t.Fatalf("total = %v, want 30", total)
+	}
+
+	body := string(playlist)
+	for _, want := range []string{
+		"#EXT-X-ENDLIST",
+		"#EXT-X-MEDIA-SEQUENCE:0",
+		"#EXT-X-START:TIME-OFFSET:0.000",
+		"seg_0001.ts",
+		"seg_0002.ts",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("playlist missing %q:\n%s", want, body)
+		}
+	}
+	for _, notWant := range []string{"seg_0000.ts", "seg_0003.ts"} {
+		if strings.Contains(body, notWant) {
+			t.Fatalf("playlist contains %q:\n%s", notWant, body)
+		}
+	}
+}
+
+func TestBuildChapterPlaylistLastChapterEndZero(t *testing.T) {
+	root := buildChapterTestHLSDir(t, "show1")
+	srv := New(config.Config{HLSDir: root})
+
+	_, segments, startOffset, endOffset, total, err := srv.BuildChapterPlaylist("show1", 24, 0)
+	if err != nil {
+		t.Fatalf("BuildChapterPlaylist returned error: %v", err)
+	}
+	assertSegments(t, segments, []string{"seg_0004.ts"})
+	if !closeFloat(startOffset, 0) {
+		t.Fatalf("startOffset = %v, want 0", startOffset)
+	}
+	if !closeFloat(endOffset, 6) {
+		t.Fatalf("endOffset = %v, want 6", endOffset)
+	}
+	if !closeFloat(total, 30) {
+		t.Fatalf("total = %v, want 30", total)
+	}
+}
+
+func TestBuildChapterPlaylistRejectsBadShowNames(t *testing.T) {
+	root := buildChapterTestHLSDir(t, "show1")
+	srv := New(config.Config{HLSDir: root})
+
+	for _, show := range []string{"..", "a/b", ""} {
+		t.Run(show, func(t *testing.T) {
+			if _, _, _, _, _, err := srv.BuildChapterPlaylist(show, 0, 6); err == nil {
+				t.Fatal("BuildChapterPlaylist error = nil, want non-nil")
+			}
+		})
+	}
+}
+
+func TestBuildChapterPlaylistMidSegmentStart(t *testing.T) {
+	root := buildChapterTestHLSDir(t, "show1")
+	srv := New(config.Config{HLSDir: root})
+
+	playlist, segments, startOffset, endOffset, _, err := srv.BuildChapterPlaylist("show1", 9, 15)
+	if err != nil {
+		t.Fatalf("BuildChapterPlaylist returned error: %v", err)
+	}
+	assertSegments(t, segments, []string{"seg_0001.ts", "seg_0002.ts"})
+	if !closeFloat(startOffset, 3) {
+		t.Fatalf("startOffset = %v, want 3", startOffset)
+	}
+	if !closeFloat(endOffset, 9) {
+		t.Fatalf("endOffset = %v, want 9", endOffset)
+	}
+	if body := string(playlist); !strings.Contains(body, "#EXT-X-START:TIME-OFFSET:3.000") {
+		t.Fatalf("playlist missing start offset:\n%s", body)
+	}
+}
+
+func TestServeScopedSegmentServesWhitelistedSegment(t *testing.T) {
+	root := buildChapterTestHLSDir(t, "show1")
+	srv := New(config.Config{HLSDir: root})
+
+	req := httptest.NewRequest(http.MethodGet, "/scoped/show1/seg_0000.ts", nil)
+	rec := httptest.NewRecorder()
+	srv.ServeScopedSegment(rec, req, "show1", "seg_0000.ts")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "video/mp2t" {
+		t.Fatalf("Content-Type = %q, want video/mp2t", ct)
+	}
+	if cc := rec.Header().Get("Cache-Control"); cc != "no-store, no-cache, must-revalidate, private" {
+		t.Fatalf("Cache-Control = %q", cc)
+	}
+}
+
+func TestServeScopedSegmentRejectsInvalidRequests(t *testing.T) {
+	root := buildChapterTestHLSDir(t, "show1")
+	if err := os.WriteFile(filepath.Join(root, "show1", "notes.txt"), []byte("notes"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	srv := New(config.Config{HLSDir: root})
+
+	tests := []struct {
+		name string
+		show string
+		file string
+	}{
+		{name: "non-whitelisted extension", show: "show1", file: "notes.txt"},
+		{name: "traversal file dotdot", show: "show1", file: ".."},
+		{name: "traversal file path", show: "show1", file: "../seg_0000.ts"},
+		{name: "bad show", show: "../show1", file: "seg_0000.ts"},
+		{name: "missing file", show: "show1", file: "seg_9999.ts"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/scoped/"+tt.show+"/"+tt.file, nil)
+			rec := httptest.NewRecorder()
+			srv.ServeScopedSegment(rec, req, tt.show, tt.file)
+			if rec.Code != http.StatusNotFound {
+				t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)
+			}
+		})
+	}
+}
+
+func buildChapterTestHLSDir(t *testing.T, show string) string {
+	t.Helper()
+	root := t.TempDir()
+	dir := filepath.Join(root, show)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	playlist := strings.Join([]string{
+		"#EXTM3U",
+		"#EXT-X-VERSION:3",
+		"#EXT-X-TARGETDURATION:6",
+		"#EXT-X-MEDIA-SEQUENCE:0",
+		"#EXT-X-PLAYLIST-TYPE:VOD",
+		"#EXTINF:6.000,",
+		"seg_0000.ts",
+		"#EXTINF:6.000,",
+		"seg_0001.ts",
+		"#EXTINF:6.000,",
+		"seg_0002.ts",
+		"#EXTINF:6.000,",
+		"seg_0003.ts",
+		"#EXTINF:6.000,",
+		"seg_0004.ts",
+		"#EXT-X-ENDLIST",
+		"",
+	}, "\n")
+	if err := os.WriteFile(filepath.Join(dir, "playlist.m3u8"), []byte(playlist), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"seg_0000.ts", "seg_0001.ts", "seg_0002.ts", "seg_0003.ts", "seg_0004.ts"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(name), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return root
+}
+
+func assertSegments(t *testing.T, got, want []string) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("segments = %#v, want %#v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("segments = %#v, want %#v", got, want)
+		}
+	}
+}
+
+func closeFloat(got, want float64) bool {
+	diff := got - want
+	if diff < 0 {
+		diff = -diff
+	}
+	return diff < 1e-6
 }
