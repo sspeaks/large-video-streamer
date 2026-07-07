@@ -34,6 +34,10 @@
     .removeChapter { border-radius: 12px; border-color: #694154; background: #2a1620; color: #ffd7df; }
     .removeChapter:hover { border-color: #ffb4c2; }
     .hint { color: #9fb0d0; font-size: 0.9rem; line-height: 1.5; margin: 0 0 12px; }
+    details.shortcuts { margin: 0 0 12px; color: #9fb0d0; font-size: 0.9rem; }
+    details.shortcuts summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; font-weight: 700; color: #edf2ff; }
+    details.shortcuts ul { margin: 8px 0 0; padding-left: 1.2rem; line-height: 1.7; }
+    details.shortcuts kbd { background: #0b1120; border: 1px solid #3a4663; border-radius: 6px; padding: 1px 6px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.85em; }
     .labelControls { display: flex; align-items: end; gap: 8px; flex-wrap: wrap; }
     .fieldGroup { flex: 1 1 180px; display: grid; gap: 6px; }
     .fieldGroup label { font-size: 0.9rem; font-weight: 700; color: #edf2ff; }
@@ -75,6 +79,15 @@
           <button id="markBtn" type="button">Mark start here</button>
         </div>
         <div id="labelMsg" class="labelMsg" role="status"></div>
+        <details class="shortcuts" id="shortcuts-help">
+          <summary>Keyboard shortcuts</summary>
+          <ul>
+            <li><kbd>n</kbd> — Focus the boundary name field</li>
+            <li><kbd>Enter</kbd> — Mark start here (while the name field is focused)</li>
+            <li><kbd>Alt</kbd> + <kbd>↑</kbd> / <kbd>↓</kbd> — Seek playback by ±5 s before marking</li>
+            <li><kbd>?</kbd> — Show this help</li>
+          </ul>
+        </details>
         <p><a id="editLabels" href="#">Open full label editor ↗</a></p>
         <h2>Chapters</h2>
         <div id="chapters"></div>
@@ -377,6 +390,59 @@
       const active = chapterCues.find(cue => video.currentTime >= cue.start && video.currentTime < cue.end);
       for (const button of chaptersEl.querySelectorAll('.chapter')) {
         button.classList.toggle('active', active && Number(button.dataset.start) === active.start);
+      }
+    });
+
+    // Fine-tune playback position by a fixed ±5 s step before marking a boundary.
+    function seekBy(delta) {
+      const duration = Number(video.duration);
+      let next = Math.max(0, (Number(video.currentTime) || 0) + delta);
+      if (Number.isFinite(duration) && duration > 0) {
+        next = Math.min(next, duration);
+      }
+      video.currentTime = next;
+      setLabelMsg((delta > 0 ? 'Skipped forward 5s to ' : 'Skipped back 5s to ') + formatTime(next) + '.', false);
+    }
+
+    function isTypingTarget(el) {
+      if (!el) return false;
+      if (el.isContentEditable) return true;
+      const tag = el.tagName;
+      return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || tag === 'VIDEO';
+    }
+
+    function openShortcutsHelp() {
+      const help = document.getElementById('shortcuts-help');
+      if (help) {
+        help.open = true;
+        help.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }
+    }
+
+    boundaryNameEl.addEventListener('keydown', event => {
+      if (event.key === 'Enter' && !event.altKey && !event.ctrlKey && !event.metaKey) {
+        event.preventDefault();
+        markBoundary();
+      }
+    });
+
+    document.addEventListener('keydown', event => {
+      if (event.defaultPrevented) return;
+      // Alt+Up/Down nudges playback ±5 s and is allowed everywhere (even while the
+      // name field is focused) so a boundary can be fine-tuned before marking.
+      if (event.altKey && !event.ctrlKey && !event.metaKey && (event.key === 'ArrowUp' || event.key === 'ArrowDown')) {
+        event.preventDefault();
+        seekBy(event.key === 'ArrowUp' ? 5 : -5);
+        return;
+      }
+      if (event.ctrlKey || event.altKey || event.metaKey) return;
+      if (isTypingTarget(document.activeElement)) return;
+      if (event.key === 'n') {
+        event.preventDefault();
+        boundaryNameEl.focus();
+      } else if (event.key === '?') {
+        event.preventDefault();
+        openShortcutsHelp();
       }
     });
   </script>
