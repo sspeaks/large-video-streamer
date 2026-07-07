@@ -62,3 +62,35 @@ func TestLabelsPageIncludesKeyboardShortcuts(t *testing.T) {
 		}
 	}
 }
+
+// TestLabelsPageKeyboardNavigationKeepsWindowSteady guards issue #12: pressing
+// j/k to step candidates must not move the browser window (no "warp down" to the
+// candidate row followed by a "slide back up" to the video). render() must scroll
+// the highlighted row only inside the candidate table's own overflow region via
+// scrollRowIntoView, and seekPreview must gate the window-moving video scroll
+// behind an explicit opt-in so only the "Preview" buttons reveal the video.
+func TestLabelsPageKeyboardNavigationKeepsWindowSteady(t *testing.T) {
+	var buf bytes.Buffer
+	if err := labelsPageTemplate.Execute(&buf, struct{ Show string }{Show: "quartet_finals"}); err != nil {
+		t.Fatalf("execute labels page template: %v", err)
+	}
+	out := buf.String()
+
+	wants := []string{
+		"const scrollRowIntoView",       // container-only scroll helper exists
+		"scrollRowIntoView(currentRow)", // render() uses it instead of window scroll
+		"if (opts.scroll)",              // seekPreview only scrolls when asked
+		"{ scroll: true }",              // explicit Preview buttons opt into reveal-scroll
+	}
+	for _, want := range wants {
+		if !strings.Contains(out, want) {
+			t.Fatalf("labels page should contain %q so j/k navigation keeps the window on the video", want)
+		}
+	}
+
+	// The window-moving row scroll (the "warp down" half of the bug) used
+	// block: 'nearest' and was the only such occurrence in the page.
+	if strings.Contains(out, "block: 'nearest'") {
+		t.Fatal("labels page should no longer contain \"block: 'nearest'\": keyboard navigation must not scroll the window to the candidate row")
+	}
+}
