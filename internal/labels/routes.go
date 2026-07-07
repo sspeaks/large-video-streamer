@@ -57,6 +57,10 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
     .save-state.saved { background: #14532d; color: #bbf7d0; }
     .save-state.dirty { background: #713f12; color: #fde68a; }
     .help { margin-top: 0; color: #cbd5e1; }
+    details.help { margin: .75rem 0; }
+    details.help summary { cursor: pointer; min-height: 44px; display: inline-flex; align-items: center; font-weight: 700; }
+    details.help ul { margin: .5rem 0 0; padding-left: 1.2rem; line-height: 1.7; }
+    kbd { background: #020617; border: 1px solid #475569; border-radius: .35rem; padding: .05rem .4rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .85em; }
     .field-label { display: block; margin-bottom: .4rem; font-weight: 700; }
     .grid { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(min(22rem, 100%), 1fr)); }
     .empty-state { padding: 1rem; color: #cbd5e1; text-align: center; }
@@ -88,6 +92,19 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
       <button id="import" class="secondary mutating-control">Import timestamps</button>
       <button id="detect" class="secondary mutating-control">Detect silences</button>
     </div>
+    <details class="help" id="shortcuts-help">
+      <summary>Keyboard shortcuts</summary>
+      <ul>
+        <li><kbd>s</kbd> — Save</li>
+        <li><kbd>a</kbd> — Add boundary</li>
+        <li><kbd>d</kbd> — Detect silences</li>
+        <li><kbd>j</kbd> — Jump preview to the next boundary</li>
+        <li><kbd>k</kbd> — Jump preview to the previous boundary</li>
+        <li><kbd>Alt</kbd> + <kbd>↑</kbd> / <kbd>↓</kbd> — Nudge the focused Start time by ±5 s</li>
+        <li><kbd>?</kbd> — Show this help</li>
+      </ul>
+      <p class="help">Single-key shortcuts are ignored while you are typing in a field or the video is focused, so they never interrupt editing or native video controls.</p>
+    </details>
     <section>
       <h2>Preview</h2>
       <video id="preview" controls playsinline></video>
@@ -311,10 +328,23 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
       boundaries.innerHTML = '';
       labels.boundaries.forEach((boundary, index) => {
         const row = document.createElement('tr');
-        row.innerHTML = '<td><input class="editable-control" value="' + escapeAttr(boundary.name || '') + '" aria-label="Boundary name"></td><td><input class="editable-control" value="' + secondsToClock(boundary.start) + '" aria-label="Boundary start"></td><td><div class="row-actions"><button class="secondary preview">Preview</button><button class="danger delete mutating-control">Delete</button></div></td>';
+        row.innerHTML = '<td><input class="editable-control" value="' + escapeAttr(boundary.name || '') + '" aria-label="Boundary name"></td><td><input class="editable-control boundary-start" value="' + secondsToClock(boundary.start) + '" aria-label="Boundary start"></td><td><div class="row-actions"><button class="secondary preview">Preview</button><button class="danger delete mutating-control">Delete</button></div></td>';
         const inputs = row.querySelectorAll('input');
         inputs[0].addEventListener('input', () => { boundary.name = inputs[0].value; setDirty(true); });
         inputs[1].addEventListener('input', () => { try { boundary.start = clockToSeconds(inputs[1].value); setDirty(true); setStatus(''); } catch (err) { setStatus(err.message); } });
+        inputs[1].addEventListener('keydown', (event) => {
+          if (!event.altKey || event.ctrlKey || event.metaKey) return;
+          if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
+          event.preventDefault();
+          const delta = event.key === 'ArrowUp' ? 5 : -5;
+          let current;
+          try { current = clockToSeconds(inputs[1].value); } catch (err) { current = Math.max(0, Number(boundary.start) || 0); }
+          const next = Math.max(0, current + delta);
+          boundary.start = next;
+          inputs[1].value = secondsToClock(next);
+          setDirty(true);
+          setStatus('Nudged start ' + (delta > 0 ? '+5s' : '-5s') + ' to ' + secondsToClock(next) + '. Save to persist.');
+        });
         row.querySelector('.preview').addEventListener('click', () => seekPreview(boundary.start));
         row.querySelector('.delete').addEventListener('click', () => {
           const removed = labels.boundaries.splice(index, 1)[0];
@@ -458,6 +488,48 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
       selected.forEach((item) => rejectCandidate(item.candidate));
       render();
       setStatus('Rejected ' + selected.length + ' selected candidate(s). Save to persist.');
+    });
+    const jumpBoundary = (direction) => {
+      normalizeLabels();
+      const starts = labels.boundaries.map((b) => Math.max(0, Number(b.start) || 0)).sort((a, b) => a - b);
+      if (starts.length === 0) { setStatus('No boundaries to jump to yet.'); return; }
+      const current = Number(preview.currentTime) || 0;
+      let target = null;
+      if (direction > 0) {
+        for (let i = 0; i < starts.length; i++) { if (starts[i] > current + 0.001) { target = starts[i]; break; } }
+      } else {
+        for (let i = starts.length - 1; i >= 0; i--) { if (starts[i] < current - 0.001) { target = starts[i]; break; } }
+      }
+      if (target === null) { setStatus(direction > 0 ? 'Already at or past the last boundary.' : 'Already at or before the first boundary.'); return; }
+      seekPreview(target);
+      setStatus('Jumped to boundary at ' + secondsToClock(target) + '.');
+    };
+    const openShortcutsHelp = () => {
+      const help = document.getElementById('shortcuts-help');
+      if (help) { help.open = true; help.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
+    };
+    const isTypingTarget = (el) => {
+      if (!el) return false;
+      if (el.isContentEditable) return true;
+      const tag = el.tagName;
+      return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || tag === 'VIDEO';
+    };
+    document.addEventListener('keydown', (event) => {
+      if (event.defaultPrevented) return;
+      if (event.ctrlKey || event.altKey || event.metaKey) return;
+      if (isTypingTarget(document.activeElement)) return;
+      const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
+      let handled = true;
+      switch (key) {
+        case 's': document.getElementById('save').click(); break;
+        case 'a': document.getElementById('add-boundary').click(); break;
+        case 'd': runDetect(); break;
+        case 'j': jumpBoundary(1); break;
+        case 'k': jumpBoundary(-1); break;
+        case '?': openShortcutsHelp(); break;
+        default: handled = false;
+      }
+      if (handled) event.preventDefault();
     });
     (async () => {
       try {
