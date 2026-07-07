@@ -47,6 +47,7 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
     button.secondary:hover { border-color: var(--accent); }
     button:disabled, input:disabled, select:disabled { opacity: .55; cursor: not-allowed; }
     .actions, .row-actions, .bulk-actions, .candidate-tools, .status-line, .nav, .header-actions { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
+    .nav { gap: .6rem; margin-bottom: .85rem; }
     .actions { margin: .75rem 0; }
     .row-actions { min-width: 18rem; }
     .candidate-table .row-actions { min-width: 15rem; }
@@ -84,8 +85,8 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
     <header>
       <div>
         <nav class="nav" aria-label="Label editor navigation">
-          <a href="/player?show={{.Show}}">← Back to player</a>
-          <a href="/">Back to library</a>
+          <a class="btn btn--secondary btn--pill" href="/player?show={{.Show}}">← Back to player</a>
+          <a class="btn btn--secondary btn--pill" href="/">← Back to library</a>
         </nav>
         <h1 id="page-title">Labels for {{.Show}}</h1>
       </div>

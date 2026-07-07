@@ -115,7 +115,7 @@ a:hover { color: var(--focus); }
 
 .btn--primary { background: var(--accent-solid); color: var(--accent-solid-text); border-color: var(--accent-solid); }
 .btn--secondary { background: var(--secondary-bg); color: var(--text); border-color: var(--secondary-border); }
-.btn--secondary:hover { border-color: var(--accent); }
+.btn--secondary:hover { border-color: var(--accent); color: var(--text); }
 .btn--danger { background: var(--danger); color: var(--danger-text); border-color: var(--danger); }
 .btn--pill { border-radius: var(--radius-pill); }
 
