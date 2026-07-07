@@ -11,6 +11,7 @@ import (
 	"github.com/sspeaks/large-video-streamer/internal/hls"
 	"github.com/sspeaks/large-video-streamer/internal/labels"
 	"github.com/sspeaks/large-video-streamer/internal/segment"
+	"github.com/sspeaks/large-video-streamer/internal/share"
 	"github.com/sspeaks/large-video-streamer/internal/web"
 )
 
@@ -27,9 +28,14 @@ func main() {
 	a.RegisterRoutes(mux)
 	hlsSrv := hls.New(cfg)
 	store := labels.New(cfg)
+	shareSrv := share.New(cfg)
 	mux.Handle("/static/", web.Handler())
 	mux.Handle("/hls/", a.RequireMedia(hlsSrv.Handler()))
 	store.RegisterRoutes(mux, a)
+	// Share routes: POST /shares is owner-gated; the /s/ recipient routes are
+	// intentionally NOT wrapped by RequireMedia/RequirePage (the device cookie
+	// is the credential).
+	shareSrv.RegisterRoutes(mux, a)
 	// Gated JSON list of available shows for the index page (401 when unauthenticated).
 	mux.Handle("GET /api/shows", a.RequireMedia(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		shows, err := hlsSrv.ListShows()

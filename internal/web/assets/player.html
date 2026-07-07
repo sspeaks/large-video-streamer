@@ -27,12 +27,22 @@
     #message.error { color: #ffb4b4; }
     #chaptersPanel h2 { margin: 0 0 12px; font-size: 1.1rem; }
     #chapters { display: grid; gap: 8px; }
-    .chapterRow { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: stretch; }
+    .chapterRow { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 8px; align-items: stretch; }
     .chapter { width: 100%; text-align: left; border-radius: 12px; border-color: #2a3654; background: #1a2237; padding: 12px 14px; white-space: normal; }
     .chapter small { display: block; color: #9fb0d0; margin-top: 4px; }
     .chapter.active { border-color: #8fb3ff; background: #223154; }
     .removeChapter { border-radius: 12px; border-color: #694154; background: #2a1620; color: #ffd7df; }
     .removeChapter:hover { border-color: #ffb4c2; }
+    .shareChapter { border-radius: 12px; border-color: #3a5641; background: #16241a; color: #c9f7d7; }
+    .shareChapter:hover { border-color: #86efac; }
+    .sharePanel { background: #0b1120; border: 1px solid #25304a; border-radius: 12px; padding: 12px; display: grid; gap: 10px; }
+    .sharePanel label { font-size: 0.85rem; font-weight: 700; color: #edf2ff; display: grid; gap: 4px; }
+    .sharePanel select, .sharePanel input { min-height: 40px; box-sizing: border-box; width: 100%; padding: 8px 10px; border-radius: 10px; border: 1px solid #3a4663; background: #12182a; color: #edf2ff; font-size: 0.95rem; }
+    .sharePanel .shareActions { display: flex; gap: 8px; flex-wrap: wrap; }
+    .shareResult { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .shareResult input { flex: 1 1 200px; }
+    .shareMsg { font-size: 0.85rem; color: #8fb3ff; min-height: 1rem; }
+    .shareMsg.error { color: #ffb4b4; }
     .hint { color: #9fb0d0; font-size: 0.9rem; line-height: 1.5; margin: 0 0 12px; }
     .labelControls { display: flex; align-items: end; gap: 8px; flex-wrap: wrap; }
     .fieldGroup { flex: 1 1 180px; display: grid; gap: 6px; }
@@ -332,9 +342,145 @@
         removeButton.textContent = 'Remove';
         removeButton.setAttribute('aria-label', 'Remove ' + cue.label + ' chapter at ' + formatTime(cue.start));
         removeButton.addEventListener('click', () => removeChapter(cue));
-        row.append(button, removeButton);
+        const shareButton = document.createElement('button');
+        shareButton.type = 'button';
+        shareButton.className = 'shareChapter';
+        shareButton.textContent = 'Share';
+        shareButton.setAttribute('aria-expanded', 'false');
+        shareButton.setAttribute('aria-label', 'Share ' + cue.label + ' chapter');
+        shareButton.addEventListener('click', () => toggleSharePanel(cue, row, shareButton));
+        row.append(button, removeButton, shareButton);
         chaptersEl.append(row);
       }
+    }
+
+    // Toggle an inline "create share link" panel beneath a chapter row.
+    function toggleSharePanel(cue, row, shareButton) {
+      const existing = row.nextElementSibling;
+      if (existing && existing.classList && existing.classList.contains('sharePanel')) {
+        existing.remove();
+        shareButton.setAttribute('aria-expanded', 'false');
+        return;
+      }
+      for (const panel of chaptersEl.querySelectorAll('.sharePanel')) {
+        panel.remove();
+      }
+      for (const btn of chaptersEl.querySelectorAll('.shareChapter')) {
+        btn.setAttribute('aria-expanded', 'false');
+      }
+      row.after(buildSharePanel(cue));
+      shareButton.setAttribute('aria-expanded', 'true');
+    }
+
+    function buildSharePanel(cue) {
+      const panel = document.createElement('div');
+      panel.className = 'sharePanel';
+
+      const modeLabel = document.createElement('label');
+      modeLabel.textContent = 'Who can watch';
+      const modeSelect = document.createElement('select');
+      modeSelect.append(new Option('Single device (default)', 'single', true, true));
+      modeSelect.append(new Option('Anyone, unlimited', 'public'));
+      modeLabel.append(modeSelect);
+
+      const expiryLabel = document.createElement('label');
+      expiryLabel.textContent = 'Expires (optional)';
+      const expiryInput = document.createElement('input');
+      expiryInput.type = 'datetime-local';
+      expiryLabel.append(expiryInput);
+
+      const actions = document.createElement('div');
+      actions.className = 'shareActions';
+      const createBtn = document.createElement('button');
+      createBtn.type = 'button';
+      createBtn.textContent = 'Create link';
+      actions.append(createBtn);
+
+      const msg = document.createElement('div');
+      msg.className = 'shareMsg';
+      msg.setAttribute('role', 'status');
+
+      const result = document.createElement('div');
+      result.className = 'shareResult';
+      result.hidden = true;
+      const urlInput = document.createElement('input');
+      urlInput.type = 'text';
+      urlInput.readOnly = true;
+      urlInput.setAttribute('aria-label', 'Share link');
+      const copyBtn = document.createElement('button');
+      copyBtn.type = 'button';
+      copyBtn.textContent = 'Copy';
+      result.append(urlInput, copyBtn);
+
+      createBtn.addEventListener('click', () =>
+        createShare(cue, modeSelect.value, expiryInput.value, { createBtn, msg, result, urlInput }));
+      copyBtn.addEventListener('click', () => {
+        urlInput.focus();
+        urlInput.select();
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(urlInput.value)
+            .then(() => setShareMsg(msg, 'Copied to clipboard.', false))
+            .catch(() => setShareMsg(msg, 'Press Ctrl/Cmd+C to copy.', false));
+        } else {
+          setShareMsg(msg, 'Press Ctrl/Cmd+C to copy.', false);
+        }
+      });
+
+      panel.append(modeLabel, expiryLabel, actions, msg, result);
+      return panel;
+    }
+
+    async function createShare(cue, mode, expiryValue, ui) {
+      let expiresAt = null;
+      if (expiryValue) {
+        const when = new Date(expiryValue);
+        if (isNaN(when.getTime())) {
+          setShareMsg(ui.msg, 'Enter a valid expiry date, or leave it blank.', true);
+          return;
+        }
+        expiresAt = when.toISOString();
+      }
+      setShareMsg(ui.msg, 'Creating link…', false);
+      ui.createBtn.disabled = true;
+      try {
+        const res = await fetch('/shares', {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            show: show,
+            boundaryIndex: cue.boundaryIndex,
+            start: cue.start,
+            name: cue.label,
+            mode: mode,
+            expiresAt: expiresAt
+          })
+        });
+        if (res.status === 401 || res.status === 403) {
+          location.href = '/login';
+          return;
+        }
+        if (!res.ok) {
+          const text = (await res.text()).trim();
+          setShareMsg(ui.msg, text || ('Could not create link (' + res.status + ').'), true);
+          return;
+        }
+        const data = await res.json();
+        ui.urlInput.value = window.location.origin + data.path;
+        ui.result.hidden = false;
+        setShareMsg(ui.msg, mode === 'public'
+          ? 'Public link created — anyone with it can watch.'
+          : 'Single-device link created — the first device to open it is bound to it.', false);
+      } catch (error) {
+        setShareMsg(ui.msg, 'Could not create link: ' + error.message, true);
+      } finally {
+        ui.createBtn.disabled = false;
+      }
+    }
+
+    function setShareMsg(el, text, isError) {
+      el.textContent = text;
+      el.classList.toggle('error', Boolean(isError));
     }
 
     async function removeChapter(cue) {

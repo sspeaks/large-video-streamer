@@ -1,12 +1,14 @@
 package hls
 
 import (
+	"math"
 	"net/http"
 	"net/url"
 	"os"
 	"path"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/sspeaks/large-video-streamer/internal/config"
@@ -197,4 +199,151 @@ func setMediaHeaders(h http.Header, contentType string) {
 	h.Set("Pragma", "no-cache")
 	h.Set("X-Content-Type-Options", "nosniff")
 	h.Set("Content-Type", contentType)
+}
+
+// BuildChapterPlaylist builds a synthetic VOD playlist containing only the
+// segments whose time ranges overlap [start, end).
+func (s *Server) BuildChapterPlaylist(show string, start, end float64) (playlist []byte, segments []string, startOffset, endOffset, total float64, err error) {
+	if show == "" || filepath.Base(show) != show || strings.Contains(show, "/") || strings.Contains(show, "\\") || strings.Contains(show, "..") {
+		err = os.ErrInvalid
+		return
+	}
+
+	data, err := os.ReadFile(filepath.Join(s.cfg.HLSDir, show, "playlist.m3u8"))
+	if err != nil {
+		return nil, nil, 0, 0, 0, err
+	}
+
+	type segment struct {
+		name  string
+		start float64
+		dur   float64
+	}
+	var all []segment
+	var pendingDur float64
+	var havePending bool
+	var maxOverall float64
+
+	for _, raw := range strings.Split(string(data), "\n") {
+		line := strings.TrimSpace(raw)
+		if line == "" {
+			continue
+		}
+		if strings.HasPrefix(line, "#EXTINF:") {
+			value := strings.TrimPrefix(line, "#EXTINF:")
+			if comma := strings.Index(value, ","); comma >= 0 {
+				value = value[:comma]
+			}
+			pendingDur, err = strconv.ParseFloat(value, 64)
+			if err != nil {
+				return nil, nil, 0, 0, 0, err
+			}
+			havePending = true
+			continue
+		}
+		if strings.HasPrefix(line, "#") {
+			continue
+		}
+		if !havePending {
+			continue
+		}
+		name := path.Base(line)
+		all = append(all, segment{name: name, start: total, dur: pendingDur})
+		total += pendingDur
+		if pendingDur > maxOverall {
+			maxOverall = pendingDur
+		}
+		havePending = false
+	}
+
+	if end <= 0 {
+		end = total
+	}
+
+	var selected []segment
+	var maxSelected float64
+	for _, seg := range all {
+		if seg.start < end && seg.start+seg.dur > start {
+			selected = append(selected, seg)
+			segments = append(segments, seg.name)
+			if seg.dur > maxSelected {
+				maxSelected = seg.dur
+			}
+		}
+	}
+
+	var firstSegStart float64
+	if len(selected) > 0 {
+		firstSegStart = selected[0].start
+	}
+	startOffset = start - firstSegStart
+	if startOffset < 0 {
+		startOffset = 0
+	}
+	endOffset = end - firstSegStart
+
+	targetDuration := int(math.Ceil(maxSelected))
+	if targetDuration == 0 {
+		targetDuration = int(math.Ceil(maxOverall))
+	}
+	if targetDuration == 0 {
+		targetDuration = 1
+	}
+
+	var b strings.Builder
+	b.WriteString("#EXTM3U\n")
+	b.WriteString("#EXT-X-VERSION:3\n")
+	b.WriteString("#EXT-X-TARGETDURATION:")
+	b.WriteString(strconv.Itoa(targetDuration))
+	b.WriteString("\n")
+	b.WriteString("#EXT-X-MEDIA-SEQUENCE:0\n")
+	b.WriteString("#EXT-X-PLAYLIST-TYPE:VOD\n")
+	b.WriteString("#EXT-X-START:TIME-OFFSET:")
+	b.WriteString(strconv.FormatFloat(startOffset, 'f', 3, 64))
+	b.WriteString("\n")
+	for _, seg := range selected {
+		b.WriteString("#EXTINF:")
+		b.WriteString(strconv.FormatFloat(seg.dur, 'f', 3, 64))
+		b.WriteString(",\n")
+		b.WriteString(seg.name)
+		b.WriteString("\n")
+	}
+	b.WriteString("#EXT-X-ENDLIST\n")
+
+	return []byte(b.String()), segments, startOffset, endOffset, total, nil
+}
+
+// ServeScopedSegment serves one whitelisted media file from one whitelisted
+// show directory for token-scoped media routes.
+func (s *Server) ServeScopedSegment(w http.ResponseWriter, r *http.Request, show, file string) {
+	if show == "" || filepath.Base(show) != show || strings.Contains(show, "/") || strings.Contains(show, "\\") || strings.Contains(show, "..") {
+		http.NotFound(w, r)
+		return
+	}
+	if file == "" || filepath.Base(file) != file || strings.Contains(file, "/") || strings.Contains(file, "\\") || strings.Contains(file, "..") {
+		http.NotFound(w, r)
+		return
+	}
+
+	contentType, ok := mediaContentType(path.Ext(file))
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+
+	f, err := os.Open(filepath.Join(s.cfg.HLSDir, show, file))
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	defer f.Close()
+
+	info, err := f.Stat()
+	if err != nil || info.IsDir() {
+		http.NotFound(w, r)
+		return
+	}
+
+	setMediaHeaders(w.Header(), contentType)
+	http.ServeContent(w, r, info.Name(), info.ModTime(), f)
 }

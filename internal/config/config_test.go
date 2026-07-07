@@ -122,3 +122,62 @@ func TestLoadAutoGeneratesAndPersistsCookieSecret(t *testing.T) {
 		t.Fatal("cookie secret changed between loads; expected persisted secret to be reused")
 	}
 }
+
+func TestLoadStateDirFromEnv(t *testing.T) {
+	for _, name := range []string{"COOKIE_SECRET", "COOKIE_SECRET_FILE", "VIDSTREAMER_DEV_NOAUTH", "HLS_DIR"} {
+		t.Setenv(name, "")
+	}
+	stateDir := t.TempDir()
+	t.Setenv("STATE_DIRECTORY", stateDir)
+	t.Setenv("VIDEO_DIR", "/videos")
+	t.Setenv("LOGIN_USER", "alice")
+	t.Setenv("LOGIN_PASS", "secret")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.StateDir != stateDir {
+		t.Fatalf("StateDir = %q, want %q", cfg.StateDir, stateDir)
+	}
+}
+
+func TestLoadStateDirDerivedFromHLSDir(t *testing.T) {
+	for _, name := range []string{"COOKIE_SECRET", "COOKIE_SECRET_FILE", "VIDSTREAMER_DEV_NOAUTH", "STATE_DIRECTORY"} {
+		t.Setenv(name, "")
+	}
+	dir := t.TempDir()
+	t.Setenv("VIDEO_DIR", "/videos")
+	t.Setenv("HLS_DIR", filepath.Join(dir, "hls"))
+	t.Setenv("LOGIN_USER", "alice")
+	t.Setenv("LOGIN_PASS", "secret")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.StateDir != dir {
+		t.Fatalf("StateDir = %q, want %q (parent of hlsDir)", cfg.StateDir, dir)
+	}
+}
+
+func TestLoadStateDirPopulatedInNoAuth(t *testing.T) {
+	for _, name := range []string{"COOKIE_SECRET", "COOKIE_SECRET_FILE", "HLS_DIR"} {
+		t.Setenv(name, "")
+	}
+	stateDir := t.TempDir()
+	t.Setenv("STATE_DIRECTORY", stateDir)
+	t.Setenv("VIDEO_DIR", "/videos")
+	t.Setenv("VIDSTREAMER_DEV_NOAUTH", "1")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !cfg.NoAuth {
+		t.Fatal("NoAuth = false, want true")
+	}
+	if cfg.StateDir != stateDir {
+		t.Fatalf("StateDir = %q, want %q even in NoAuth mode", cfg.StateDir, stateDir)
+	}
+}

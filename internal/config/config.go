@@ -20,6 +20,7 @@ type Config struct {
 	CookieSecret   []byte // base64 from COOKIE_SECRET or file at COOKIE_SECRET_FILE ; must decode >=32 bytes
 	NoAuth         bool   // env VIDSTREAMER_DEV_NOAUTH=1/true disables auth for local development
 	SegmentOnStart bool   // env VIDSTREAMER_SEGMENT_ON_START=1/true segments videos at startup
+	StateDir       string // writable dir for server state (cookie-secret, shares.json) ; STATE_DIRECTORY env else parent of HLSDir
 }
 
 // Load reads environment configuration, applies defaults, and validates required settings.
@@ -49,6 +50,15 @@ func Load() (Config, error) {
 		hlsDir = filepath.Join(stateDir, "hls")
 	}
 
+	// Resolve the writable state directory unconditionally (independent of the
+	// auth branch) so it is populated even in NoAuth mode. This is the same
+	// directory that holds the persisted cookie-secret and, now, shares.json:
+	// STATE_DIRECTORY when set by systemd, otherwise the parent of hlsDir.
+	stateDir := os.Getenv("STATE_DIRECTORY")
+	if stateDir == "" {
+		stateDir = filepath.Dir(hlsDir)
+	}
+
 	if noAuth {
 		cookieSecret = make([]byte, 32)
 		if _, err := rand.Read(cookieSecret); err != nil {
@@ -76,7 +86,7 @@ func Load() (Config, error) {
 		// present; if creds are missing the config is already invalid and we must
 		// not create side effects (a persisted secret file).
 		if loginUser != "" && loginPass != "" {
-			secret, err := resolveCookieSecret(hlsDir)
+			secret, err := resolveCookieSecret(stateDir)
 			if err != nil {
 				validationErrs = append(validationErrs, err)
 			} else {
@@ -98,6 +108,7 @@ func Load() (Config, error) {
 		CookieSecret:   cookieSecret,
 		NoAuth:         noAuth,
 		SegmentOnStart: segmentOnStart,
+		StateDir:       stateDir,
 	}, nil
 }
 
@@ -106,10 +117,11 @@ func Load() (Config, error) {
 // If COOKIE_SECRET or COOKIE_SECRET_FILE is provided, it is used (and must be
 // base64-encoded and decode to at least 32 bytes). Otherwise a random 32-byte
 // secret is generated once and persisted to <stateDir>/cookie-secret so it is
-// stable across restarts. The state dir is STATE_DIRECTORY (set by systemd) when
-// present, otherwise the parent of hlsDir. This lets operators manage only the
-// username/password: the cookie secret is internal server state, not a credential.
-func resolveCookieSecret(hlsDir string) ([]byte, error) {
+// stable across restarts. stateDir is the caller-resolved state directory
+// (STATE_DIRECTORY when set by systemd, otherwise the parent of hlsDir). This
+// lets operators manage only the username/password: the cookie secret is
+// internal server state, not a credential.
+func resolveCookieSecret(stateDir string) ([]byte, error) {
 	if os.Getenv("COOKIE_SECRET") != "" || os.Getenv("COOKIE_SECRET_FILE") != "" {
 		encoded, err := readSecret("COOKIE_SECRET", "COOKIE_SECRET_FILE")
 		if err != nil {
@@ -125,10 +137,7 @@ func resolveCookieSecret(hlsDir string) ([]byte, error) {
 		return secret, nil
 	}
 
-	dir := os.Getenv("STATE_DIRECTORY")
-	if dir == "" {
-		dir = filepath.Dir(hlsDir)
-	}
+	dir := stateDir
 	path := filepath.Join(dir, "cookie-secret")
 
 	if data, err := os.ReadFile(path); err == nil {
