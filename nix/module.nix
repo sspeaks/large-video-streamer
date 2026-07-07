@@ -52,6 +52,16 @@ in
       description = "Group account that runs the vid-streamer service.";
     };
 
+    supplementaryGroups = lib.mkOption {
+      type = types.listOf types.str;
+      default = [ ];
+      description = ''
+        Extra groups granted to the service process. Use this when videoDir is
+        group-readable by a non-service group, e.g. [ "users" ] for
+        /srv/videos owned by another user.
+      '';
+    };
+
     noAuth = lib.mkOption {
       type = types.bool;
       default = false;
@@ -105,12 +115,17 @@ in
       ${cfg.user} = {
         isSystemUser = true;
         group = cfg.group;
+        extraGroups = cfg.supplementaryGroups;
       };
     };
 
     users.groups = lib.optionalAttrs (cfg.group == defaultGroup) {
       ${cfg.group} = { };
     };
+
+    systemd.tmpfiles.rules = [
+      "d ${toString cfg.hlsDir} 0750 ${cfg.user} ${cfg.group} -"
+    ];
 
     systemd.services.vid-streamer = {
       description = "vid-streamer authenticated HLS video server";
@@ -135,11 +150,20 @@ in
       // lib.optionalAttrs (!cfg.noAuth && cfg.cookieSecretFile != null) {
         COOKIE_SECRET_FILE = toString cfg.cookieSecretFile;
       };
+      preStart = ''
+        ${pkgs.findutils}/bin/find ${lib.escapeShellArg (toString cfg.hlsDir)} \
+          -mindepth 1 -maxdepth 1 -type d -name '.*.tmp' \
+          -exec ${pkgs.coreutils}/bin/rm -rf -- {} +
+      '';
+      unitConfig = lib.optionalAttrs (!cfg.noAuth) {
+        ConditionPathExists = cfg.loginPassFile;
+      };
 
       serviceConfig = {
         ExecStart = lib.getExe cfg.package;
         User = cfg.user;
         Group = cfg.group;
+        SupplementaryGroups = cfg.supplementaryGroups;
         StateDirectory = "vid-streamer";
         Restart = "on-failure";
         RestartSec = "5s";
@@ -152,8 +176,6 @@ in
         # Ensure the (read-only) source video folder is readable even with
         # ProtectHome/ProtectSystem, wherever the operator places it.
         BindReadOnlyPaths = [ cfg.videoDir ];
-      } // lib.optionalAttrs (!cfg.noAuth) {
-        ConditionPathExists = cfg.loginPassFile;
       };
     };
 

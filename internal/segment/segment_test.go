@@ -45,6 +45,13 @@ func TestSegmentAllProcessesTopLevelMKV(t *testing.T) {
 
 	videoDir := t.TempDir()
 	hlsDir := t.TempDir()
+	staleTmp := filepath.Join(hlsDir, ".batch.123.tmp")
+	if err := os.MkdirAll(staleTmp, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(staleTmp, "playlist.m3u8"), []byte("#EXTM3U\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	generateSyntheticMKV(t, videoDir, "batch")
 
 	cfg := config.Config{VideoDir: videoDir, HLSDir: hlsDir}
@@ -54,6 +61,9 @@ func TestSegmentAllProcessesTopLevelMKV(t *testing.T) {
 
 	playlist := filepath.Join(hlsDir, "batch", "playlist.m3u8")
 	readNonEmptyFile(t, playlist)
+	if _, err := os.Stat(staleTmp); !os.IsNotExist(err) {
+		t.Fatalf("stale temp dir still exists or stat failed unexpectedly: %v", err)
+	}
 }
 
 func requireTools(t *testing.T) {

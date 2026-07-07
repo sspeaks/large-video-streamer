@@ -24,7 +24,7 @@ The dev shell includes Go, `gopls`, `gotools`, `ffmpeg`, and `mkvtoolnix`.
 - `HLS_DIR`: optional writable HLS output folder, defaults to `$STATE_DIRECTORY/hls` or `state/hls`.
 - `LOGIN_USER` or `LOGIN_USER_FILE`: required login username; file variant wins.
 - `LOGIN_PASS` or `LOGIN_PASS_FILE`: required login password; file variant wins.
-- `COOKIE_SECRET` or `COOKIE_SECRET_FILE`: required base64 string that decodes to at least 32 bytes; file variant wins.
+- `COOKIE_SECRET` or `COOKIE_SECRET_FILE`: optional base64 string that decodes to at least 32 bytes; file variant wins. If omitted, the server generates and persists one under the state directory.
 
 Secret file values are read with trailing newlines removed.
 
@@ -83,6 +83,8 @@ The flake exports `nixosModules.vidStreamer` and `nixosModules.default`. Add it 
             enable = true;
             package = vid-streamer.packages.x86_64-linux.default;
             videoDir = "/srv/videos";
+            # Optional: when /srv/videos is group-readable by another group.
+            supplementaryGroups = [ "users" ];
             listenAddr = "127.0.0.1:8080";
             loginUserFile = "/run/secrets/vid-streamer-user";
             loginPassFile = "/run/secrets/vid-streamer-pass";
@@ -94,5 +96,10 @@ The flake exports `nixosModules.vidStreamer` and `nixosModules.default`. Add it 
   };
 }
 ```
+
+The NixOS module creates `hlsDir` with service ownership before systemd applies
+`ReadWritePaths`, removes stale hidden `.*.tmp` HLS directories on service start,
+and adds `supplementaryGroups` to both the system user and service process. Source
+video files must still be readable by the service user or one of those groups.
 
 Set `services.vidStreamer.noAuth = true` only for trusted/local deployments; it disables the credential file requirements. For local development, `nix run .#dev` starts the dev server.

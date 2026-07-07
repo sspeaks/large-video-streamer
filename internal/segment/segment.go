@@ -83,6 +83,10 @@ func Segment(cfg config.Config, videoName string) error {
 
 // SegmentAll generates HLS output for every top-level MKV in cfg.VideoDir.
 func SegmentAll(cfg config.Config) error {
+	if err := cleanupStaleTempDirs(cfg.HLSDir); err != nil {
+		return err
+	}
+
 	entries, err := os.ReadDir(cfg.VideoDir)
 	if err != nil {
 		return fmt.Errorf("read video dir %q: %w", cfg.VideoDir, err)
@@ -99,6 +103,31 @@ func SegmentAll(cfg config.Config) error {
 		}
 	}
 
+	return errors.Join(errs...)
+}
+
+func cleanupStaleTempDirs(hlsDir string) error {
+	entries, err := os.ReadDir(hlsDir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("read HLS dir %q: %w", hlsDir, err)
+	}
+
+	var errs []error
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if !strings.HasPrefix(name, ".") || !strings.HasSuffix(name, ".tmp") {
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(hlsDir, name)); err != nil {
+			errs = append(errs, fmt.Errorf("remove stale temporary HLS dir %q: %w", name, err))
+		}
+	}
 	return errors.Join(errs...)
 }
 

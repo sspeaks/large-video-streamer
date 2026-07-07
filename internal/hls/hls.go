@@ -87,9 +87,12 @@ func (s *Server) List() ([]Show, error) {
 			continue
 		}
 		name := entry.Name()
+		if strings.HasPrefix(name, ".") {
+			continue
+		}
 		playlist := filepath.Join(s.cfg.HLSDir, name, "playlist.m3u8")
 		info, err := os.Stat(playlist)
-		if err != nil || info.IsDir() {
+		if err != nil || info.IsDir() || info.Size() == 0 {
 			continue
 		}
 		shows = append(shows, Show{

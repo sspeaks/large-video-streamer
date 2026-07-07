@@ -87,6 +87,18 @@ func TestListReturnsShowsWithPlaylistsSortedByName(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "aaa", "playlist.m3u8"), []byte("#EXTM3U\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.MkdirAll(filepath.Join(root, ".show1.123.tmp"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".show1.123.tmp", "playlist.m3u8"), []byte("#EXTM3U\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "empty"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "empty", "playlist.m3u8"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	srv := New(config.Config{HLSDir: root})
 	shows, err := srv.List()
