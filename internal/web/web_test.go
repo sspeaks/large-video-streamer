@@ -51,6 +51,28 @@ func TestPlayerServesHTMLWithHLSAndChapters(t *testing.T) {
 	}
 }
 
+func TestPlayerIncludesKeyboardShortcuts(t *testing.T) {
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/player?show=demo", nil)
+
+	Player().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("Player() status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	body := rec.Body.String()
+	wants := []string{
+		"addEventListener('keydown'",
+		"Keyboard shortcuts",
+		"seekBy",
+	}
+	for _, want := range wants {
+		if !strings.Contains(body, want) {
+			t.Fatalf("Player() body does not contain %q for keyboard shortcuts", want)
+		}
+	}
+}
+
 func TestHandlerServesVendoredHLS(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/static/hls.min.js", nil)
