@@ -233,10 +233,27 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
         previewStatus.textContent = 'This browser cannot play HLS video.';
       }
     })();
-    const seekPreview = (seconds) => {
+    const seekPreview = (seconds, opts) => {
+      opts = opts || {};
       preview.currentTime = Math.max(0, Number(seconds) || 0);
       preview.play().catch(() => {});
-      preview.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      if (opts.scroll) preview.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    };
+    const scrollRowIntoView = (row) => {
+      if (!row) return;
+      const wrap = row.closest('.candidate-table-wrap');
+      if (!wrap) return;
+      const header = wrap.querySelector('thead');
+      const headerH = header ? header.getBoundingClientRect().height : 0;
+      const rowRect = row.getBoundingClientRect();
+      const wrapRect = wrap.getBoundingClientRect();
+      const visibleTop = wrapRect.top + headerH;
+      const visibleBottom = wrapRect.bottom;
+      if (rowRect.top < visibleTop) {
+        wrap.scrollTop -= (visibleTop - rowRect.top);
+      } else if (rowRect.bottom > visibleBottom) {
+        wrap.scrollTop += (rowRect.bottom - visibleBottom);
+      }
     };
     const secondsToClock = (seconds) => {
       seconds = Math.max(0, Math.round(Number(seconds) || 0));
@@ -439,7 +456,7 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
         const inputs = row.querySelectorAll('input');
         inputs[0].addEventListener('input', () => { boundary.name = inputs[0].value; setDirty(true); });
         inputs[1].addEventListener('input', () => { try { boundary.start = clockToSeconds(inputs[1].value); setDirty(true); setStatus(''); } catch (err) { setStatus(err.message); } });
-        row.querySelector('.preview').addEventListener('click', () => seekPreview(boundary.start));
+        row.querySelector('.preview').addEventListener('click', () => seekPreview(boundary.start, { scroll: true }));
         row.querySelector('.delete').addEventListener('click', () => {
           const removed = labels.boundaries.splice(index, 1)[0];
           setDirty(true);
@@ -475,7 +492,7 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
             else selectedCandidates.delete(item.key);
             updateBulkControls();
           });
-          row.querySelector('.preview').addEventListener('click', () => seekPreview(candidate.time));
+          row.querySelector('.preview').addEventListener('click', () => seekPreview(candidate.time, { scroll: true }));
           if (!handled) {
             row.querySelector('.promote').addEventListener('click', () => {
               if (promoteCandidate(candidate, row.querySelector('.inline-name').value)) {
@@ -493,7 +510,7 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
         });
       }
       const currentRow = candidates.querySelector('tr.candidate-current');
-      if (currentRow) currentRow.scrollIntoView({ block: 'nearest' });
+      scrollRowIntoView(currentRow);
       setBusy(busy);
     };
     const runDetect = async () => {
