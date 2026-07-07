@@ -27,8 +27,9 @@ func TestLabelsPageEmbedsShowNameWithoutDoubleQuoting(t *testing.T) {
 }
 
 // TestLabelsPageIncludesKeyboardShortcuts asserts the editor wires up the
-// keyboard-shortcut layer (global keydown handler, per-row ±5 s nudge hook, and
-// the discoverable help legend) added for issue 8 "Speed labeling".
+// candidate-review keyboard layer (global keydown handler, current-candidate
+// promote/reject/replay/nudge helpers, and the discoverable help legend) and no
+// longer carries the retired boundary-navigation shortcuts.
 func TestLabelsPageIncludesKeyboardShortcuts(t *testing.T) {
 	var buf bytes.Buffer
 	if err := labelsPageTemplate.Execute(&buf, struct{ Show string }{Show: "quartet_finals"}); err != nil {
@@ -39,15 +40,25 @@ func TestLabelsPageIncludesKeyboardShortcuts(t *testing.T) {
 	wants := []string{
 		"addEventListener('keydown'",
 		"Keyboard shortcuts",
-		"boundary-start",
-		"jumpBoundary",
 		"openShortcutsHelp",
-		"Nudged start",
+		"stepCandidate",
+		"promoteCurrentCandidate",
+		"rejectCurrentCandidate",
+		"replayCurrent",
+		"nudgeCurrentCandidate",
+		"candidate-current",
+		"Nudged candidate",
 		"Alt",
 	}
 	for _, want := range wants {
 		if !strings.Contains(out, want) {
-			t.Fatalf("labels page should contain %q to wire up keyboard shortcuts", want)
+			t.Fatalf("labels page should contain %q to wire up candidate keyboard shortcuts", want)
+		}
+	}
+
+	for _, notWant := range []string{"jumpBoundary", "Nudged start", "boundary-start"} {
+		if strings.Contains(out, notWant) {
+			t.Fatalf("labels page should no longer contain %q after moving shortcuts to candidates", notWant)
 		}
 	}
 }

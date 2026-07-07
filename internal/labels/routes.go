@@ -64,6 +64,8 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
     .field-label { display: block; margin-bottom: .4rem; font-weight: 700; }
     .grid { display: grid; gap: 1rem; grid-template-columns: minmax(0, 1fr); }
     .empty-state { padding: 1rem; color: var(--text-muted); text-align: center; }
+    tr.candidate-current > td { background: var(--surface-input); }
+    tr.candidate-current { outline: 2px solid var(--accent); outline-offset: -2px; }
     video { width: 100%; max-height: 60vh; background: var(--bg-deep); border-radius: .5rem; }
     @media (max-width: 640px) {
       main { width: 100%; max-width: 100%; padding: .75rem; }
@@ -106,12 +108,13 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
     <details class="help" id="shortcuts-help">
       <summary>Keyboard shortcuts</summary>
       <ul>
+        <li><kbd>j</kbd> / <kbd>k</kbd> — Next / previous candidate (jumps the preview)</li>
+        <li><kbd>Enter</kbd> — Promote the current candidate (prompts for a name)</li>
+        <li><kbd>x</kbd> — Reject the current candidate</li>
+        <li><kbd>r</kbd> — Replay from the current candidate's start time</li>
+        <li><kbd>Alt</kbd> + <kbd>↑</kbd> / <kbd>↓</kbd> — Nudge the current candidate by ±5 s (the promoted boundary uses the new time)</li>
         <li><kbd>s</kbd> — Save</li>
-        <li><kbd>a</kbd> — Add boundary</li>
         <li><kbd>d</kbd> — Detect silences</li>
-        <li><kbd>j</kbd> — Jump preview to the next boundary</li>
-        <li><kbd>k</kbd> — Jump preview to the previous boundary</li>
-        <li><kbd>Alt</kbd> + <kbd>↑</kbd> / <kbd>↓</kbd> — Nudge the focused Start time by ±5 s</li>
         <li><kbd>?</kbd> — Show this help</li>
       </ul>
       <p class="help">Single-key shortcuts are ignored while you are typing in a field or the video is focused, so they never interrupt editing or native video controls.</p>
@@ -176,6 +179,7 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
     let labels = { video: show, boundaries: [], candidates: [] };
     let dirty = false;
     let busy = false;
+    let currentKey = null;
     const selectedCandidates = new Set();
     const statusEl = document.getElementById('status');
     const statusActions = document.getElementById('status-actions');
@@ -318,6 +322,97 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
       selectedCandidates.delete(candidateKey(candidate));
       setDirty(true);
     };
+    const visiblePendingItems = () => candidateItems().filter((item) => !isHandledCandidate(item.candidate));
+    const currentCandidateItem = () => visiblePendingItems().find((item) => item.key === currentKey) || null;
+    const clampCurrent = () => {
+      const items = visiblePendingItems();
+      if (!items.some((item) => item.key === currentKey)) {
+        currentKey = items.length ? items[0].key : null;
+      }
+    };
+    const ensureCurrent = () => {
+      let item = currentCandidateItem();
+      if (!item) {
+        const items = visiblePendingItems();
+        item = items.length ? items[0] : null;
+        currentKey = item ? item.key : null;
+      }
+      return item;
+    };
+    const setCurrent = (key, opts) => {
+      opts = opts || {};
+      currentKey = key;
+      render();
+      if (opts.seek) {
+        const item = currentCandidateItem();
+        if (item) seekPreview(item.candidate.time);
+      }
+    };
+    const stepCandidate = (direction) => {
+      const items = visiblePendingItems();
+      if (items.length === 0) { setStatus('No pending candidates to review. Run Detect silences first.'); return; }
+      let idx = items.findIndex((item) => item.key === currentKey);
+      if (idx === -1) idx = direction > 0 ? -1 : items.length;
+      const nextIdx = idx + direction;
+      if (nextIdx < 0) { setCurrent(items[0].key, { seek: true }); setStatus('Already at the first candidate.'); return; }
+      if (nextIdx >= items.length) { setCurrent(items[items.length - 1].key, { seek: true }); setStatus('Already at the last candidate.'); return; }
+      const next = items[nextIdx];
+      setCurrent(next.key, { seek: true });
+      setStatus('Candidate ' + (nextIdx + 1) + ' of ' + items.length + ' at ' + secondsToClock(next.candidate.time) + '.');
+    };
+    const nextPendingKeyAfter = (beforeItems, handledIndex) => {
+      const stillPending = new Set(visiblePendingItems().map((item) => item.key));
+      for (let i = handledIndex + 1; i < beforeItems.length; i++) { if (stillPending.has(beforeItems[i].key)) return beforeItems[i].key; }
+      for (let i = handledIndex - 1; i >= 0; i--) { if (stillPending.has(beforeItems[i].key)) return beforeItems[i].key; }
+      const remaining = visiblePendingItems();
+      return remaining.length ? remaining[0].key : null;
+    };
+    const promoteCurrentCandidate = () => {
+      const items = visiblePendingItems();
+      if (items.length === 0) { setStatus('No pending candidates to promote.'); return; }
+      const item = currentCandidateItem() || items[0];
+      const handledIndex = items.findIndex((i) => i.key === item.key);
+      const defaultName = (bulkName.value || '').trim() || 'group-a';
+      const name = window.prompt('Boundary name for candidate at ' + secondsToClock(item.candidate.time), defaultName);
+      if (name === null) { setStatus('Promote cancelled.'); return; }
+      if (!promoteCandidate(item.candidate, name)) return;
+      const time = item.candidate.time;
+      const nextKey = nextPendingKeyAfter(items, handledIndex);
+      setCurrent(nextKey, { seek: Boolean(nextKey) });
+      setStatus('Promoted candidate at ' + secondsToClock(time) + '. Save to persist.');
+    };
+    const rejectCurrentCandidate = () => {
+      const items = visiblePendingItems();
+      if (items.length === 0) { setStatus('No pending candidates to reject.'); return; }
+      const item = currentCandidateItem() || items[0];
+      const handledIndex = items.findIndex((i) => i.key === item.key);
+      const time = item.candidate.time;
+      rejectCandidate(item.candidate);
+      const nextKey = nextPendingKeyAfter(items, handledIndex);
+      setCurrent(nextKey, { seek: Boolean(nextKey) });
+      setStatus('Rejected candidate at ' + secondsToClock(time) + '. Save to persist.');
+    };
+    const replayCurrent = () => {
+      const item = ensureCurrent();
+      if (!item) { setStatus('No candidate to replay. Run Detect silences first.'); return; }
+      render();
+      seekPreview(item.candidate.time);
+      setStatus('Replaying from ' + secondsToClock(item.candidate.time) + '.');
+    };
+    const nudgeCurrentCandidate = (delta) => {
+      const item = ensureCurrent();
+      if (!item) { setStatus('No candidate to nudge. Run Detect silences first.'); return; }
+      const oldKey = candidateKey(item.candidate);
+      const next = Math.max(0, (Number(item.candidate.time) || 0) + delta);
+      item.candidate.time = next;
+      const newKey = candidateKey(item.candidate);
+      if (selectedCandidates.has(oldKey)) { selectedCandidates.delete(oldKey); selectedCandidates.add(newKey); }
+      currentKey = newKey;
+      setDirty(true);
+      render();
+      seekPreview(next);
+      setStatus('Nudged candidate ' + (delta > 0 ? '+5s' : '-5s') + ' to ' + secondsToClock(next) + '. Enter to promote.');
+    };
     const offerUndoDelete = (boundary, index) => {
       statusEl.textContent = 'Deleted boundary “' + (boundary.name || 'unnamed') + '”. Save to persist or undo now.';
       statusActions.innerHTML = '';
@@ -339,23 +434,10 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
       boundaries.innerHTML = '';
       labels.boundaries.forEach((boundary, index) => {
         const row = document.createElement('tr');
-        row.innerHTML = '<td><input class="editable-control" value="' + escapeAttr(boundary.name || '') + '" aria-label="Boundary name"></td><td><input class="editable-control boundary-start" value="' + secondsToClock(boundary.start) + '" aria-label="Boundary start"></td><td><div class="row-actions"><button class="secondary preview">Preview</button><button class="danger delete mutating-control">Delete</button></div></td>';
+        row.innerHTML = '<td><input class="editable-control" value="' + escapeAttr(boundary.name || '') + '" aria-label="Boundary name"></td><td><input class="editable-control" value="' + secondsToClock(boundary.start) + '" aria-label="Boundary start"></td><td><div class="row-actions"><button class="secondary preview">Preview</button><button class="danger delete mutating-control">Delete</button></div></td>';
         const inputs = row.querySelectorAll('input');
         inputs[0].addEventListener('input', () => { boundary.name = inputs[0].value; setDirty(true); });
         inputs[1].addEventListener('input', () => { try { boundary.start = clockToSeconds(inputs[1].value); setDirty(true); setStatus(''); } catch (err) { setStatus(err.message); } });
-        inputs[1].addEventListener('keydown', (event) => {
-          if (!event.altKey || event.ctrlKey || event.metaKey) return;
-          if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
-          event.preventDefault();
-          const delta = event.key === 'ArrowUp' ? 5 : -5;
-          let current;
-          try { current = clockToSeconds(inputs[1].value); } catch (err) { current = Math.max(0, Number(boundary.start) || 0); }
-          const next = Math.max(0, current + delta);
-          boundary.start = next;
-          inputs[1].value = secondsToClock(next);
-          setDirty(true);
-          setStatus('Nudged start ' + (delta > 0 ? '+5s' : '-5s') + ' to ' + secondsToClock(next) + '. Save to persist.');
-        });
         row.querySelector('.preview').addEventListener('click', () => seekPreview(boundary.start));
         row.querySelector('.delete').addEventListener('click', () => {
           const removed = labels.boundaries.splice(index, 1)[0];
@@ -368,6 +450,7 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
       const candidates = document.getElementById('candidates');
       candidates.innerHTML = '';
       updateCandidateCount();
+      clampCurrent();
       const visibleCandidates = candidateItems();
       if (visibleCandidates.length === 0) {
         const row = document.createElement('tr');
@@ -379,6 +462,7 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
         visibleCandidates.forEach((item) => {
           const candidate = item.candidate;
           const row = document.createElement('tr');
+          if (item.key === currentKey) { row.classList.add('candidate-current'); row.setAttribute('aria-current', 'true'); }
           const checked = selectedCandidates.has(item.key) ? ' checked' : '';
           const handled = isHandledCandidate(candidate);
           const disabled = handled ? ' disabled' : '';
@@ -407,6 +491,8 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
           candidates.appendChild(row);
         });
       }
+      const currentRow = candidates.querySelector('tr.candidate-current');
+      if (currentRow) currentRow.scrollIntoView({ block: 'nearest' });
       setBusy(busy);
     };
     const runDetect = async () => {
@@ -500,21 +586,6 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
       render();
       setStatus('Rejected ' + selected.length + ' selected candidate(s). Save to persist.');
     });
-    const jumpBoundary = (direction) => {
-      normalizeLabels();
-      const starts = labels.boundaries.map((b) => Math.max(0, Number(b.start) || 0)).sort((a, b) => a - b);
-      if (starts.length === 0) { setStatus('No boundaries to jump to yet.'); return; }
-      const current = Number(preview.currentTime) || 0;
-      let target = null;
-      if (direction > 0) {
-        for (let i = 0; i < starts.length; i++) { if (starts[i] > current + 0.001) { target = starts[i]; break; } }
-      } else {
-        for (let i = starts.length - 1; i >= 0; i--) { if (starts[i] < current - 0.001) { target = starts[i]; break; } }
-      }
-      if (target === null) { setStatus(direction > 0 ? 'Already at or past the last boundary.' : 'Already at or before the first boundary.'); return; }
-      seekPreview(target);
-      setStatus('Jumped to boundary at ' + secondsToClock(target) + '.');
-    };
     const openShortcutsHelp = () => {
       const help = document.getElementById('shortcuts-help');
       if (help) { help.open = true; help.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
@@ -527,16 +598,25 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
     };
     document.addEventListener('keydown', (event) => {
       if (event.defaultPrevented) return;
-      if (event.ctrlKey || event.altKey || event.metaKey) return;
       if (isTypingTarget(document.activeElement)) return;
+      if (event.altKey && !event.ctrlKey && !event.metaKey && (event.key === 'ArrowUp' || event.key === 'ArrowDown')) {
+        event.preventDefault();
+        nudgeCurrentCandidate(event.key === 'ArrowUp' ? 5 : -5);
+        return;
+      }
+      if (event.ctrlKey || event.altKey || event.metaKey) return;
+      const active = document.activeElement;
+      const activeIsButtonlike = active && (active.tagName === 'BUTTON' || active.tagName === 'A');
       const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
       let handled = true;
       switch (key) {
         case 's': document.getElementById('save').click(); break;
-        case 'a': document.getElementById('add-boundary').click(); break;
         case 'd': runDetect(); break;
-        case 'j': jumpBoundary(1); break;
-        case 'k': jumpBoundary(-1); break;
+        case 'j': stepCandidate(1); break;
+        case 'k': stepCandidate(-1); break;
+        case 'x': rejectCurrentCandidate(); break;
+        case 'r': replayCurrent(); break;
+        case 'Enter': if (activeIsButtonlike) { handled = false; } else { promoteCurrentCandidate(); } break;
         case '?': openShortcutsHelp(); break;
         default: handled = false;
       }
