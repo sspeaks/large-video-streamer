@@ -73,7 +73,7 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
     </section>
   </main>
   <script>
-    const show = {{printf "%q" .Show}};
+    const show = {{ .Show }};
     const api = '/labels/api/' + encodeURIComponent(show);
     let labels = { video: show, boundaries: [], candidates: [] };
     const statusEl = document.getElementById('status');
