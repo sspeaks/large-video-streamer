@@ -501,6 +501,12 @@ func TestViewerHeadersAndNoChrome(t *testing.T) {
 	if got := rec.Header().Get("Content-Security-Policy"); !strings.Contains(got, "default-src 'self'") {
 		t.Fatalf("CSP = %q", got)
 	}
+	if got := rec.Header().Get("Content-Security-Policy"); !strings.Contains(got, "media-src 'self' blob:") {
+		t.Fatalf("CSP media-src = %q", got)
+	}
+	if got := rec.Header().Get("Content-Security-Policy"); !strings.Contains(got, "worker-src 'self' blob:") {
+		t.Fatalf("CSP worker-src = %q", got)
+	}
 	body := rec.Body.String()
 	if !strings.Contains(body, "Public Chapter") || !strings.Contains(body, "hls.min.js") || !strings.Contains(body, "<video") {
 		t.Fatalf("viewer body missing expected content: %q", body)

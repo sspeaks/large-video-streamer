@@ -361,14 +361,15 @@ func setShareCookie(w http.ResponseWriter, token, secret string, expiresAt *time
 }
 
 // setShareHTMLHeaders applies the no-chrome viewer's hardening headers: no
-// caching, no referrer leakage of the token, and a same-origin-only CSP.
+// caching, no referrer leakage of the token, and a CSP that still allows
+// hls.js to attach its blob-backed MediaSource and worker.
 func setShareHTMLHeaders(w http.ResponseWriter) {
 	h := w.Header()
 	h.Set("Content-Type", "text/html; charset=utf-8")
 	h.Set("Cache-Control", "no-store")
 	h.Set("Referrer-Policy", "no-referrer")
 	h.Set("X-Content-Type-Options", "nosniff")
-	h.Set("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; media-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'self'")
+	h.Set("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; media-src 'self' blob:; worker-src 'self' blob:; img-src 'self' data:; base-uri 'none'; form-action 'self'")
 }
 
 func validShowName(show string) bool {
