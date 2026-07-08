@@ -49,6 +49,9 @@
     .labelMsg { min-height: 1.2rem; font-size: 0.9rem; margin: 8px 0; color: var(--accent); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
     .labelMsg.error { color: var(--error-text); }
     .labelMsg button { min-height: 36px; border-radius: var(--radius-pill); padding: 6px 12px; }
+    .labelActions { display: flex; gap: 8px; flex-wrap: wrap; margin: 0 0 8px; }
+    .labelActions:empty { display: none; }
+    .labelActions button { min-height: 36px; border-radius: var(--radius-pill); padding: 6px 12px; }
   </style>
 </head>
 <body>
@@ -89,9 +92,11 @@
             <button id="markBtn" type="button">Mark start here</button>
           </div>
           <div id="labelMsg" class="labelMsg" role="status"></div>
+          <div id="labelActions" class="labelActions"></div>
           <details class="shortcuts" id="shortcuts-help">
             <summary>Keyboard shortcuts</summary>
             <ul>
+              <li><kbd>b</kbd> — Mark a boundary at the current spot (Esc to cancel)</li>
               <li><kbd>n</kbd> — Focus the boundary name field</li>
               <li><kbd>Enter</kbd> — Mark start here (while the name field is focused)</li>
               <li><kbd>Alt</kbd> + <kbd>↑</kbd> / <kbd>↓</kbd> — Seek playback by ±5 s before marking</li>
@@ -119,6 +124,7 @@
     const editLabelsEl = document.getElementById('editLabels');
     let chapterCues = [];
     let nativeChapterTrack = null;
+    let pendingBoundaryStart = null; // seconds snapshotted at hotkey press; null when idle
     video.setAttribute('aria-label', displayName(show));
 
     if (!show) {
@@ -162,18 +168,75 @@
         setBoundaryNameInvalid();
         return;
       }
-      const start = Math.round(video.currentTime || 0);
+      const start = (pendingBoundaryStart !== null)
+        ? pendingBoundaryStart
+        : Math.round(video.currentTime || 0);
       try {
         const labels = await fetchLabelsForEdit();
-        labels.boundaries.push({ name: name, start: start });
+        const added = { name: name, start: start };
+        labels.boundaries.push(added);
         await saveLabels(labels);
         boundaryNameEl.value = '';
+        pendingBoundaryStart = null;
         clearBoundaryNameInvalid();
         setLabelMsg('Marked "' + name + '" at ' + formatTime(start) + '.', false);
+        offerBoundaryUndo(added);
         await loadChapters();
       } catch (error) {
         setLabelMsg('Could not save: ' + error.message, true);
       }
+    }
+
+    // Snapshot the current spot the instant the hotkey is pressed, then start name entry.
+    function startBoundaryMark() {
+      clearBoundaryActions();
+      pendingBoundaryStart = Math.round(video.currentTime || 0);
+      boundaryNameEl.focus();
+      setLabelMsg('Marking a boundary at ' + formatTime(pendingBoundaryStart) +
+        ' — type a name, then Enter to save or Esc to cancel.', false);
+    }
+
+    // Pre-save back-out: abandon an in-progress mark without writing anything.
+    function cancelBoundaryMark() {
+      if (pendingBoundaryStart === null) return false;
+      pendingBoundaryStart = null;
+      clearBoundaryActions();
+      clearBoundaryNameInvalid();
+      setLabelMsg('Boundary marking cancelled.', false);
+      return true;
+    }
+
+    function clearBoundaryActions() {
+      const actions = document.getElementById('labelActions');
+      if (actions) actions.innerHTML = '';
+    }
+
+    // Post-save back-out: one-click removal of the boundary just added.
+    function offerBoundaryUndo(added) {
+      const actions = document.getElementById('labelActions');
+      if (!actions) return;
+      actions.innerHTML = '';
+      const undo = document.createElement('button');
+      undo.type = 'button';
+      undo.textContent = 'Undo';
+      undo.addEventListener('click', async () => {
+        try {
+          const labels = await fetchLabelsForEdit();
+          let idx = -1;
+          for (let i = labels.boundaries.length - 1; i >= 0; i--) {
+            if (labels.boundaries[i].name === added.name && labels.boundaries[i].start === added.start) { idx = i; break; }
+          }
+          if (idx === -1) { setLabelMsg('Nothing to undo.', false); clearBoundaryActions(); return; }
+          labels.boundaries.splice(idx, 1);
+          await saveLabels(labels);
+          clearBoundaryActions();
+          setLabelMsg('Removed "' + added.name + '".', false);
+          await loadChapters();
+        } catch (error) {
+          setLabelMsg('Could not undo: ' + error.message, true);
+        }
+      });
+      actions.appendChild(undo);
     }
 
     async function fetchLabelsForEdit() {
@@ -556,6 +619,9 @@
       if (event.key === 'Enter' && !event.altKey && !event.ctrlKey && !event.metaKey) {
         event.preventDefault();
         markBoundary();
+      } else if (event.key === 'Escape' && pendingBoundaryStart !== null) {
+        event.preventDefault();
+        cancelBoundaryMark();
       }
     });
 
@@ -568,11 +634,19 @@
         seekBy(event.key === 'ArrowUp' ? 5 : -5);
         return;
       }
+      // Esc backs out an in-progress mark even if the name field lost focus.
+      if (event.key === 'Escape') {
+        if (cancelBoundaryMark()) event.preventDefault();
+        return;
+      }
       if (event.ctrlKey || event.altKey || event.metaKey) return;
       if (isTypingTarget(document.activeElement)) return;
       if (event.key === 'n') {
         event.preventDefault();
         boundaryNameEl.focus();
+      } else if (event.key === 'b') {
+        event.preventDefault();
+        startBoundaryMark();
       } else if (event.key === '?') {
         event.preventDefault();
         openShortcutsHelp();

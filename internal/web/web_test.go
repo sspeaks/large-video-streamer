@@ -73,6 +73,31 @@ func TestPlayerIncludesKeyboardShortcuts(t *testing.T) {
 	}
 }
 
+func TestPlayerIncludesBoundaryHotkey(t *testing.T) {
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/player?show=demo", nil)
+
+	Player().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("Player() status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	body := rec.Body.String()
+	wants := []string{
+		"pendingBoundaryStart",
+		"startBoundaryMark",
+		"cancelBoundaryMark",
+		"offerBoundaryUndo",
+		"Mark a boundary at the current spot",
+		"<kbd>b</kbd>",
+	}
+	for _, want := range wants {
+		if !strings.Contains(body, want) {
+			t.Fatalf("Player() body does not contain %q for the boundary hotkey", want)
+		}
+	}
+}
+
 func TestPlayerShowsChaptersBelowVideoWithoutRemove(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/player?show=demo", nil)
