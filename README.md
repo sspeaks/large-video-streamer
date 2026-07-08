@@ -25,13 +25,15 @@ The dev shell includes Go, `gopls`, `gotools`, `ffmpeg`, and `mkvtoolnix`.
 - `LOGIN_USER` or `LOGIN_USER_FILE`: required login username; file variant wins.
 - `LOGIN_PASS` or `LOGIN_PASS_FILE`: required login password; file variant wins.
 - `COOKIE_SECRET` or `COOKIE_SECRET_FILE`: optional base64 string that decodes to at least 32 bytes; file variant wins. If omitted, the server generates and persists one under the state directory.
+- `DB_PATH`: optional SQLite database path, defaults to `<StateDir>/app.db`.
+- `VIDSTREAMER_FLAT_FILE_STATE`: optional rollback flag (`1`/`true`) that keeps using legacy `<StateDir>/shares.json` and `<StateDir>/labels/*.labels.json` instead of SQLite.
 
-Secret file values are read with trailing newlines removed. Generated label sidecars are written under the state directory at `<StateDir>/labels/<video>.labels.json`, because `VIDEO_DIR` is read-only.
+Secret file values are read with trailing newlines removed. On normal startup the server opens SQLite, applies schema migrations, and idempotently imports legacy `shares.json` and label sidecars without deleting them. To roll back, set `VIDSTREAMER_FLAT_FILE_STATE=1`; `cookie-secret` remains a flat file.
 
 ## Package layout and interface contract
 
 - `internal/config`: owns environment loading.
-  - `type Config struct { ListenAddr string; VideoDir string; HLSDir string; LoginUser string; LoginPass string; CookieSecret []byte }`
+  - `type Config` contains runtime paths, credentials, auth/dev flags, and SQLite/flat-file state settings.
   - `func Load() (Config, error)`
 - `internal/auth`: owns login/logout routes and auth gates.
   - `type Authenticator struct`
@@ -43,7 +45,7 @@ Secret file values are read with trailing newlines removed. Generated label side
   - `type Server struct`
   - `func New(cfg config.Config) *Server`
   - `func (s *Server) Handler() http.Handler`
-- `internal/labels`: owns label sidecars stored under the writable state directory (`<StateDir>/labels/<video>.labels.json`), not next to read-only source videos, plus UI/API routes and timestamp import/export.
+- `internal/labels`: owns label persistence seams, UI/API routes, and timestamp import/export.
   - `type Boundary struct { Name string; Start float64 }`
   - `type Candidate struct { Time float64; Duration float64; Status string }`
   - `type VideoLabels struct { Video string; Boundaries []Boundary; Candidates []Candidate }`
@@ -102,6 +104,6 @@ The NixOS module creates `hlsDir` with service ownership before systemd applies
 `ReadWritePaths`, removes stale hidden `.*.tmp` HLS directories on service start,
 adds `supplementaryGroups` to both the system user and service process, and can
 manage source-video group access with `videoAccessGroup`. Source video files must
-still be readable by the service user or one of those groups. Generated label sidecars are written to the systemd state directory because `videoDir` is read-only.
+still be readable by the service user or one of those groups. SQLite state is stored in the systemd state directory by default. Legacy flat files are left in place after import so rollback remains possible with `services.vidStreamer.legacyFlatFileState = true`.
 
 Set `services.vidStreamer.noAuth = true` only for trusted/local deployments; it disables the credential file requirements. For local development, `nix run .#dev` starts the dev server.

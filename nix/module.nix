@@ -88,6 +88,15 @@ in
       description = "Segment all videos in videoDir into HLS when the service starts.";
     };
 
+    legacyFlatFileState = lib.mkOption {
+      type = types.bool;
+      default = false;
+      description = ''
+        Use legacy flat-file shares.json and labels/*.labels.json state instead
+        of SQLite. This is intended only as a rollback path after migration.
+      '';
+    };
+
     loginUserFile = lib.mkOption {
       type = types.nullOr types.path;
       default = null;
@@ -160,6 +169,9 @@ in
       }
       // lib.optionalAttrs cfg.noAuth {
         VIDSTREAMER_DEV_NOAUTH = "1";
+      }
+      // lib.optionalAttrs cfg.legacyFlatFileState {
+        VIDSTREAMER_FLAT_FILE_STATE = "1";
       }
       // lib.optionalAttrs (!cfg.noAuth) {
         LOGIN_USER_FILE = toString cfg.loginUserFile;

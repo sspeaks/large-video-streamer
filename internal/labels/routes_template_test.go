@@ -94,3 +94,24 @@ func TestLabelsPageKeyboardNavigationKeepsWindowSteady(t *testing.T) {
 		t.Fatal("labels page should no longer contain \"block: 'nearest'\": keyboard navigation must not scroll the window to the candidate row")
 	}
 }
+
+func TestLabelsPageMarksEditorInputsForPasswordManagers(t *testing.T) {
+	var buf bytes.Buffer
+	if err := labelsPageTemplate.Execute(&buf, struct{ Show string }{Show: "quartet_finals"}); err != nil {
+		t.Fatalf("execute labels page template: %v", err)
+	}
+	out := buf.String()
+
+	wants := []string{
+		`id="bulk-name" name="bulk-name" type="text"`,
+		`id="timestamps" name="timestamps" autocomplete="off" data-lpignore="true"`,
+		`name="boundary-name-' + index + '" autocomplete="off" data-lpignore="true"`,
+		`name="candidate-boundary-name-' + item.index + '" autocomplete="off" data-lpignore="true"`,
+		`name="candidate-select-' + item.index + '" aria-label=`,
+	}
+	for _, want := range wants {
+		if !strings.Contains(out, want) {
+			t.Fatalf("labels page should contain %q to keep password managers off editor controls", want)
+		}
+	}
+}

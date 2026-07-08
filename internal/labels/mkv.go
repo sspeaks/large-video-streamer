@@ -19,6 +19,10 @@ type ffprobeChapters struct {
 
 // ImportMKVChapters reads MKV chapter starts and titles using ffprobe.
 func (s *Store) ImportMKVChapters(mkvPath string) ([]Boundary, error) {
+	return importMKVChapters(mkvPath)
+}
+
+func importMKVChapters(mkvPath string) ([]Boundary, error) {
 	ffprobe, err := exec.LookPath("ffprobe")
 	if err != nil {
 		return nil, fmt.Errorf("ffprobe is required to import MKV chapters: %w", err)
@@ -47,6 +51,10 @@ func (s *Store) ImportMKVChapters(mkvPath string) ([]Boundary, error) {
 
 // ExportMKVChapters embeds boundaries into an MKV using mkvpropedit.
 func (s *Store) ExportMKVChapters(mkvPath string, boundaries []Boundary) error {
+	return exportMKVChapters(mkvPath, boundaries)
+}
+
+func exportMKVChapters(mkvPath string, boundaries []Boundary) error {
 	mkvpropedit, err := exec.LookPath("mkvpropedit")
 	if err != nil {
 		return fmt.Errorf("mkvpropedit is required to export MKV chapters: %w", err)

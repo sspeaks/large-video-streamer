@@ -9,6 +9,7 @@
     body { display: grid; }
     main { width: min(920px, calc(100% - 32px)); min-height: 100vh; margin: 0 auto; padding: 48px 0; display: grid; align-content: center; }
     header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 32px; }
+    .header-actions { display: flex; gap: .75rem; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
     h1 { margin: 0; font-size: clamp(2rem, 5vw, 3.5rem); letter-spacing: -0.05em; }
     p { color: var(--text-muted); line-height: 1.6; }
     .card { background: linear-gradient(180deg, var(--surface), var(--bg-deep)); padding: 24px; }
@@ -39,9 +40,12 @@
         <h1>Video Library</h1>
         <p>Choose a show to start playback.</p>
       </div>
-      <form method="post" action="/logout">
-        <button class="btn btn--secondary btn--pill" type="submit">Sign out</button>
-      </form>
+      <div class="header-actions">
+        <a class="btn btn--secondary btn--pill" href="/admin/shares">Manage shares</a>
+        <form method="post" action="/logout">
+          <button class="btn btn--secondary btn--pill" type="submit">Sign out</button>
+        </form>
+      </div>
     </header>
 
     <section class="card" aria-live="polite">

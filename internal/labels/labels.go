@@ -26,14 +26,37 @@ type VideoLabels struct {
 	Candidates []Candidate `json:"candidates"`
 }
 
+// LabelStore persists per-video label sidecars.
+type LabelStore interface {
+	Load(video string) (VideoLabels, error)
+	Save(labels VideoLabels) error
+}
+
 // Store loads and saves per-video label sidecars.
 type Store struct {
 	cfg config.Config
 }
 
-// New returns a label store rooted in the configured video directory.
+var _ LabelStore = (*Store)(nil)
+
+// Server owns the label routes while delegating persistence to a LabelStore.
+type Server struct {
+	cfg   config.Config
+	store LabelStore
+}
+
+// New returns the flat-file label store rooted in the configured state directory.
 func New(cfg config.Config) *Store {
 	return &Store{cfg: cfg}
+}
+
+// NewServer returns a label route server using store for persistence. A nil
+// store keeps the current flat-file behavior.
+func NewServer(cfg config.Config, store LabelStore) *Server {
+	if store == nil {
+		store = New(cfg)
+	}
+	return &Server{cfg: cfg, store: store}
 }
 
 // Load reads labels for video.

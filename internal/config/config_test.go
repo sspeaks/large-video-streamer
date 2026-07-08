@@ -13,6 +13,9 @@ func TestLoadReadsSecretsFromFilesAndDefaults(t *testing.T) {
 	t.Setenv("LISTEN_ADDR", "")
 	t.Setenv("VIDEO_DIR", "/videos")
 	t.Setenv("HLS_DIR", "/state/hls")
+	t.Setenv("STATE_DIRECTORY", "")
+	t.Setenv("DB_PATH", "")
+	t.Setenv("VIDSTREAMER_FLAT_FILE_STATE", "")
 
 	dir := t.TempDir()
 	userFile := filepath.Join(dir, "user")
@@ -45,10 +48,13 @@ func TestLoadReadsSecretsFromFilesAndDefaults(t *testing.T) {
 	if len(cfg.CookieSecret) != 32 {
 		t.Fatalf("CookieSecret length = %d", len(cfg.CookieSecret))
 	}
+	if cfg.DBPath != "/state/app.db" {
+		t.Fatalf("DBPath = %q, want /state/app.db", cfg.DBPath)
+	}
 }
 
 func TestLoadRejectsMissingRequiredFields(t *testing.T) {
-	for _, name := range []string{"LISTEN_ADDR", "VIDEO_DIR", "HLS_DIR", "LOGIN_USER", "LOGIN_USER_FILE", "LOGIN_PASS", "LOGIN_PASS_FILE", "COOKIE_SECRET", "COOKIE_SECRET_FILE", "STATE_DIRECTORY"} {
+	for _, name := range []string{"LISTEN_ADDR", "VIDEO_DIR", "HLS_DIR", "LOGIN_USER", "LOGIN_USER_FILE", "LOGIN_PASS", "LOGIN_PASS_FILE", "COOKIE_SECRET", "COOKIE_SECRET_FILE", "STATE_DIRECTORY", "DB_PATH", "VIDSTREAMER_FLAT_FILE_STATE"} {
 		t.Setenv(name, "")
 	}
 	_, err := Load()
@@ -58,7 +64,7 @@ func TestLoadRejectsMissingRequiredFields(t *testing.T) {
 }
 
 func TestLoadDevNoAuthDoesNotRequireCredentials(t *testing.T) {
-	for _, name := range []string{"LOGIN_USER", "LOGIN_USER_FILE", "LOGIN_PASS", "LOGIN_PASS_FILE", "COOKIE_SECRET", "COOKIE_SECRET_FILE"} {
+	for _, name := range []string{"LOGIN_USER", "LOGIN_USER_FILE", "LOGIN_PASS", "LOGIN_PASS_FILE", "COOKIE_SECRET", "COOKIE_SECRET_FILE", "VIDSTREAMER_FLAT_FILE_STATE"} {
 		t.Setenv(name, "")
 	}
 	t.Setenv("VIDEO_DIR", "/videos")
@@ -80,7 +86,7 @@ func TestLoadDevNoAuthDoesNotRequireCredentials(t *testing.T) {
 }
 
 func TestLoadWithoutDevNoAuthStillRequiresCredentials(t *testing.T) {
-	for _, name := range []string{"LOGIN_USER", "LOGIN_USER_FILE", "LOGIN_PASS", "LOGIN_PASS_FILE", "COOKIE_SECRET", "COOKIE_SECRET_FILE", "VIDSTREAMER_DEV_NOAUTH"} {
+	for _, name := range []string{"LOGIN_USER", "LOGIN_USER_FILE", "LOGIN_PASS", "LOGIN_PASS_FILE", "COOKIE_SECRET", "COOKIE_SECRET_FILE", "VIDSTREAMER_DEV_NOAUTH", "VIDSTREAMER_FLAT_FILE_STATE"} {
 		t.Setenv(name, "")
 	}
 	t.Setenv("VIDEO_DIR", "/videos")
@@ -93,7 +99,7 @@ func TestLoadWithoutDevNoAuthStillRequiresCredentials(t *testing.T) {
 
 func TestLoadAutoGeneratesAndPersistsCookieSecret(t *testing.T) {
 	dir := t.TempDir()
-	for _, name := range []string{"COOKIE_SECRET", "COOKIE_SECRET_FILE", "VIDSTREAMER_DEV_NOAUTH", "STATE_DIRECTORY"} {
+	for _, name := range []string{"COOKIE_SECRET", "COOKIE_SECRET_FILE", "VIDSTREAMER_DEV_NOAUTH", "STATE_DIRECTORY", "DB_PATH", "VIDSTREAMER_FLAT_FILE_STATE"} {
 		t.Setenv(name, "")
 	}
 	t.Setenv("VIDEO_DIR", "/videos")
@@ -124,7 +130,7 @@ func TestLoadAutoGeneratesAndPersistsCookieSecret(t *testing.T) {
 }
 
 func TestLoadStateDirFromEnv(t *testing.T) {
-	for _, name := range []string{"COOKIE_SECRET", "COOKIE_SECRET_FILE", "VIDSTREAMER_DEV_NOAUTH", "HLS_DIR"} {
+	for _, name := range []string{"COOKIE_SECRET", "COOKIE_SECRET_FILE", "VIDSTREAMER_DEV_NOAUTH", "HLS_DIR", "DB_PATH", "VIDSTREAMER_FLAT_FILE_STATE"} {
 		t.Setenv(name, "")
 	}
 	stateDir := t.TempDir()
@@ -140,10 +146,13 @@ func TestLoadStateDirFromEnv(t *testing.T) {
 	if cfg.StateDir != stateDir {
 		t.Fatalf("StateDir = %q, want %q", cfg.StateDir, stateDir)
 	}
+	if cfg.DBPath != filepath.Join(stateDir, "app.db") {
+		t.Fatalf("DBPath = %q, want %q", cfg.DBPath, filepath.Join(stateDir, "app.db"))
+	}
 }
 
 func TestLoadStateDirDerivedFromHLSDir(t *testing.T) {
-	for _, name := range []string{"COOKIE_SECRET", "COOKIE_SECRET_FILE", "VIDSTREAMER_DEV_NOAUTH", "STATE_DIRECTORY"} {
+	for _, name := range []string{"COOKIE_SECRET", "COOKIE_SECRET_FILE", "VIDSTREAMER_DEV_NOAUTH", "STATE_DIRECTORY", "DB_PATH", "VIDSTREAMER_FLAT_FILE_STATE"} {
 		t.Setenv(name, "")
 	}
 	dir := t.TempDir()
@@ -159,10 +168,13 @@ func TestLoadStateDirDerivedFromHLSDir(t *testing.T) {
 	if cfg.StateDir != dir {
 		t.Fatalf("StateDir = %q, want %q (parent of hlsDir)", cfg.StateDir, dir)
 	}
+	if cfg.DBPath != filepath.Join(dir, "app.db") {
+		t.Fatalf("DBPath = %q, want %q", cfg.DBPath, filepath.Join(dir, "app.db"))
+	}
 }
 
 func TestLoadStateDirPopulatedInNoAuth(t *testing.T) {
-	for _, name := range []string{"COOKIE_SECRET", "COOKIE_SECRET_FILE", "HLS_DIR"} {
+	for _, name := range []string{"COOKIE_SECRET", "COOKIE_SECRET_FILE", "HLS_DIR", "DB_PATH", "VIDSTREAMER_FLAT_FILE_STATE"} {
 		t.Setenv(name, "")
 	}
 	stateDir := t.TempDir()
@@ -179,5 +191,45 @@ func TestLoadStateDirPopulatedInNoAuth(t *testing.T) {
 	}
 	if cfg.StateDir != stateDir {
 		t.Fatalf("StateDir = %q, want %q even in NoAuth mode", cfg.StateDir, stateDir)
+	}
+}
+
+func TestLoadDBPathOverride(t *testing.T) {
+	for _, name := range []string{"COOKIE_SECRET", "COOKIE_SECRET_FILE", "HLS_DIR", "VIDSTREAMER_FLAT_FILE_STATE"} {
+		t.Setenv(name, "")
+	}
+	stateDir := t.TempDir()
+	dbPath := filepath.Join(t.TempDir(), "custom.db")
+	t.Setenv("STATE_DIRECTORY", stateDir)
+	t.Setenv("DB_PATH", dbPath)
+	t.Setenv("VIDEO_DIR", "/videos")
+	t.Setenv("VIDSTREAMER_DEV_NOAUTH", "1")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.StateDir != stateDir {
+		t.Fatalf("StateDir = %q, want %q", cfg.StateDir, stateDir)
+	}
+	if cfg.DBPath != dbPath {
+		t.Fatalf("DBPath = %q, want %q", cfg.DBPath, dbPath)
+	}
+}
+
+func TestLoadFlatFileStateFlag(t *testing.T) {
+	for _, name := range []string{"COOKIE_SECRET", "COOKIE_SECRET_FILE", "HLS_DIR", "STATE_DIRECTORY", "DB_PATH"} {
+		t.Setenv(name, "")
+	}
+	t.Setenv("VIDEO_DIR", "/videos")
+	t.Setenv("VIDSTREAMER_DEV_NOAUTH", "1")
+	t.Setenv("VIDSTREAMER_FLAT_FILE_STATE", "true")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !cfg.UseFlatFileState {
+		t.Fatal("UseFlatFileState = false, want true")
 	}
 }

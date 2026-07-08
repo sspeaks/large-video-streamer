@@ -55,6 +55,23 @@ type Share struct {
 	CreatedAt   time.Time  `json:"created_at"`
 }
 
+// ShareSummary is an admin-safe snapshot of a share. It excludes the frozen
+// media payload and device hash; token hashes are enough for management actions.
+type ShareSummary struct {
+	TokenHash   string     `json:"token_hash"`
+	Show        string     `json:"show"`
+	ChapterName string     `json:"chapter_name"`
+	Start       float64    `json:"start"`
+	End         float64    `json:"end"`
+	StartOffset float64    `json:"start_offset"`
+	EndOffset   float64    `json:"end_offset"`
+	Mode        Mode       `json:"mode"`
+	ExpiresAt   *time.Time `json:"expires_at,omitempty"`
+	ClaimedAt   *time.Time `json:"claimed_at,omitempty"`
+	RevokedAt   *time.Time `json:"revoked_at,omitempty"`
+	CreatedAt   time.Time  `json:"created_at"`
+}
+
 // DeviceMatches reports whether deviceSecret (the raw value from the vid_share
 // cookie) matches this share's bound device, using a constant-time compare.
 func (sh *Share) DeviceMatches(deviceSecret string) bool {
@@ -79,11 +96,28 @@ type CreateParams struct {
 	ExpiresAt   *time.Time
 }
 
+// ShareStore persists shares for routes and future management backends.
+type ShareStore interface {
+	Create(CreateParams) (string, error)
+	Get(token string) (*Share, bool)
+	List() []ShareSummary
+	Claim(token, deviceSecret string) bool
+	RevokeByHash(tokenHash string) (bool, error)
+	DeleteByHash(tokenHash string) (bool, error)
+}
+
 // Store holds shares in memory and persists them atomically to a JSON file.
 type Store struct {
 	mu     sync.Mutex
 	byHash map[string]*Share
 	path   string
+}
+
+var _ ShareStore = (*Store)(nil)
+
+// NewStore returns a flat-file share store backed by path.
+func NewStore(path string) *Store {
+	return newStore(path)
 }
 
 // newStore returns a store backed by path, loading any existing shares. A
@@ -128,10 +162,10 @@ func (s *Store) Create(p CreateParams) (string, error) {
 		End:         p.End,
 		StartOffset: p.StartOffset,
 		EndOffset:   p.EndOffset,
-		Segments:    p.Segments,
+		Segments:    append([]string(nil), p.Segments...),
 		Playlist:    p.Playlist,
 		Mode:        p.Mode,
-		ExpiresAt:   p.ExpiresAt,
+		ExpiresAt:   cloneTime(p.ExpiresAt),
 		CreatedAt:   time.Now().UTC(),
 	}
 
@@ -155,8 +189,26 @@ func (s *Store) Get(token string) (*Share, bool) {
 	if !ok {
 		return nil, false
 	}
-	cp := *rec
-	return &cp, true
+	return cloneShare(rec), true
+}
+
+// List returns admin-safe share summaries, including revoked and expired
+// records, sorted deterministically by CreatedAt ascending then TokenHash.
+func (s *Store) List() []ShareSummary {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	shares := make([]*Share, 0, len(s.byHash))
+	for _, rec := range s.byHash {
+		shares = append(shares, rec)
+	}
+	sortShares(shares)
+
+	summaries := make([]ShareSummary, 0, len(shares))
+	for _, rec := range shares {
+		summaries = append(summaries, summarizeShare(rec))
+	}
+	return summaries
 }
 
 // Claim binds a single-mode share to deviceSecret on the first successful call.
@@ -186,16 +238,46 @@ func (s *Store) Claim(token, deviceSecret string) bool {
 // Revoke marks a share revoked (deny-by-default thereafter) and persists. It is
 // idempotent and a no-op for unknown tokens.
 func (s *Store) Revoke(token string) {
-	h := sha256hex(token)
+	_, _ = s.RevokeByHash(sha256hex(token))
+}
+
+// RevokeByHash marks a share revoked by its stored token hash and persists. It
+// is idempotent; persistence failures roll back the in-memory change.
+func (s *Store) RevokeByHash(tokenHash string) (bool, error) {
 	now := time.Now().UTC()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	rec, ok := s.byHash[h]
-	if !ok || rec.RevokedAt != nil {
-		return
+	rec, ok := s.byHash[tokenHash]
+	if !ok {
+		return false, nil
 	}
+	if rec.RevokedAt != nil {
+		return true, nil
+	}
+	prev := rec.RevokedAt
 	rec.RevokedAt = &now
-	_ = s.persistLocked()
+	if err := s.persistLocked(); err != nil {
+		rec.RevokedAt = prev
+		return true, err
+	}
+	return true, nil
+}
+
+// DeleteByHash permanently removes a share by its stored token hash and
+// persists. Persistence failures restore the deleted in-memory record.
+func (s *Store) DeleteByHash(tokenHash string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec, ok := s.byHash[tokenHash]
+	if !ok {
+		return false, nil
+	}
+	delete(s.byHash, tokenHash)
+	if err := s.persistLocked(); err != nil {
+		s.byHash[tokenHash] = rec
+		return true, err
+	}
+	return true, nil
 }
 
 // usable reports whether a share is neither revoked nor expired at now.
@@ -223,12 +305,7 @@ func (s *Store) persistLocked() error {
 	for _, v := range s.byHash {
 		shares = append(shares, v)
 	}
-	sort.Slice(shares, func(i, j int) bool {
-		if shares[i].CreatedAt.Equal(shares[j].CreatedAt) {
-			return shares[i].TokenHash < shares[j].TokenHash
-		}
-		return shares[i].CreatedAt.Before(shares[j].CreatedAt)
-	})
+	sortShares(shares)
 	data, err := json.MarshalIndent(shares, "", "  ")
 	if err != nil {
 		return err
@@ -274,4 +351,51 @@ func generateSecret() (string, error) {
 func sha256hex(s string) string {
 	sum := sha256.Sum256([]byte(s))
 	return hex.EncodeToString(sum[:])
+}
+
+func cloneShare(sh *Share) *Share {
+	cp := *sh
+	cp.Segments = append([]string(nil), sh.Segments...)
+	cp.ExpiresAt = cloneTime(sh.ExpiresAt)
+	cp.ClaimedAt = cloneTime(sh.ClaimedAt)
+	cp.RevokedAt = cloneTime(sh.RevokedAt)
+	return &cp
+}
+
+func summarizeShare(sh *Share) ShareSummary {
+	return ShareSummary{
+		TokenHash:   sh.TokenHash,
+		Show:        sh.Show,
+		ChapterName: sh.ChapterName,
+		Start:       sh.Start,
+		End:         sh.End,
+		StartOffset: sh.StartOffset,
+		EndOffset:   sh.EndOffset,
+		Mode:        sh.Mode,
+		ExpiresAt:   cloneTime(sh.ExpiresAt),
+		ClaimedAt:   cloneTime(sh.ClaimedAt),
+		RevokedAt:   cloneTime(sh.RevokedAt),
+		CreatedAt:   sh.CreatedAt,
+	}
+}
+
+func cloneTime(t *time.Time) *time.Time {
+	if t == nil {
+		return nil
+	}
+	cp := *t
+	return &cp
+}
+
+func sortShares(shares []*Share) {
+	sort.Slice(shares, func(i, j int) bool {
+		return lessShare(shares[i], shares[j])
+	})
+}
+
+func lessShare(a, b *Share) bool {
+	if a.CreatedAt.Equal(b.CreatedAt) {
+		return a.TokenHash < b.TokenHash
+	}
+	return a.CreatedAt.Before(b.CreatedAt)
 }

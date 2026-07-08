@@ -93,6 +93,29 @@ func TestPlayerShowsChaptersBelowVideoWithoutRemove(t *testing.T) {
 	}
 }
 
+func TestPlayerMarksNonCredentialInputsForPasswordManagers(t *testing.T) {
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/player?show=demo", nil)
+
+	Player().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("Player() status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	body := rec.Body.String()
+	wants := []string{
+		`id="boundaryName" name="boundaryName"`,
+		`autocomplete="off" data-lpignore="true"`,
+		`expiryInput.setAttribute('data-lpignore', 'true')`,
+		`urlInput.setAttribute('data-lpignore', 'true')`,
+	}
+	for _, want := range wants {
+		if !strings.Contains(body, want) {
+			t.Fatalf("Player() body does not contain %q for non-credential inputs", want)
+		}
+	}
+}
+
 func TestHandlerServesVendoredHLS(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/static/hls.min.js", nil)

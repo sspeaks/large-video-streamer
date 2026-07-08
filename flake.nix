@@ -12,7 +12,7 @@
           pname = "vid-streamer";
           version = "0.1.0";
           src = ./.;
-          vendorHash = null;
+          vendorHash = "sha256-XYCq8AdFSuu2k4DR8cgtxmK6TFTRq1WuRpo4AZDTF6U=";
           # The Go module path's last element is "large-video-streamer", so the
           # compiled binary is named that. Rename it to the friendlier
           # "vid-streamer" expected by meta.mainProgram, the dev app, and the

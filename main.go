@@ -1,10 +1,12 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"log"
 	"net/http"
+	"path/filepath"
 
 	"github.com/sspeaks/large-video-streamer/internal/auth"
 	"github.com/sspeaks/large-video-streamer/internal/config"
@@ -12,6 +14,7 @@ import (
 	"github.com/sspeaks/large-video-streamer/internal/labels"
 	"github.com/sspeaks/large-video-streamer/internal/segment"
 	"github.com/sspeaks/large-video-streamer/internal/share"
+	dbstore "github.com/sspeaks/large-video-streamer/internal/store"
 	"github.com/sspeaks/large-video-streamer/internal/web"
 )
 
@@ -23,18 +26,31 @@ func main() {
 	if cfg.NoAuth {
 		log.Printf("WARNING: authentication DISABLED (VIDSTREAMER_DEV_NOAUTH) — do NOT expose this server to the internet")
 	}
+	if cfg.UseFlatFileState {
+		log.Printf("WARNING: using legacy flat-file state stores (VIDSTREAMER_FLAT_FILE_STATE); SQLite is disabled")
+	}
+	shareStore, labelStore, closeState, err := openStateStores(context.Background(), cfg)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer func() {
+		if err := closeState(); err != nil {
+			log.Printf("close state stores: %v", err)
+		}
+	}()
+
 	mux := http.NewServeMux()
 	a := auth.New(cfg)
 	a.RegisterRoutes(mux)
 	hlsSrv := hls.New(cfg)
-	store := labels.New(cfg)
-	shareSrv := share.New(cfg)
+	labelSrv := labels.NewServer(cfg, labelStore)
+	shareSrv := share.NewWithStores(cfg, shareStore, labelStore)
 	mux.Handle("/static/", web.Handler())
 	mux.Handle("/hls/", a.RequireMedia(hlsSrv.Handler()))
-	store.RegisterRoutes(mux, a)
-	// Share routes: POST /shares is owner-gated; the /s/ recipient routes are
-	// intentionally NOT wrapped by RequireMedia/RequirePage (the device cookie
-	// is the credential).
+	labelSrv.RegisterRoutes(mux, a)
+	// Share routes: POST /shares and /admin/shares are owner-gated; the /s/
+	// recipient routes are intentionally NOT wrapped by RequireMedia/RequirePage
+	// (the device cookie is the credential).
 	shareSrv.RegisterRoutes(mux, a)
 	// Gated JSON list of available shows for the index page (401 when unauthenticated).
 	mux.Handle("GET /api/shows", a.RequireMedia(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -65,6 +81,31 @@ func main() {
 	log.Printf("vid-streamer listening on %s (videoDir=%s hlsDir=%s)", cfg.ListenAddr, cfg.VideoDir, cfg.HLSDir)
 	log.Fatal(http.ListenAndServe(cfg.ListenAddr, mux))
 }
+
+func openStateStores(ctx context.Context, cfg config.Config) (share.ShareStore, labels.LabelStore, func() error, error) {
+	if cfg.UseFlatFileState {
+		return share.NewStore(filepath.Join(cfg.StateDir, "shares.json")), labels.New(cfg), noopClose, nil
+	}
+
+	db, err := dbstore.Open(ctx, cfg.DBPath)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	closeDB := func() error { return db.Close() }
+
+	if err := dbstore.ImportLegacyState(ctx, db, cfg.StateDir); err != nil {
+		_ = closeDB()
+		return nil, nil, nil, err
+	}
+	shareStore, err := dbstore.NewShareStore(ctx, db)
+	if err != nil {
+		_ = closeDB()
+		return nil, nil, nil, err
+	}
+	return shareStore, dbstore.NewLabelStore(db), closeDB, nil
+}
+
+func noopClose() error { return nil }
 
 // faviconSVG is a small inline app icon (dark rounded tile + play glyph) served
 // at /favicon.ico so browsers stop logging a 404 on every page load.

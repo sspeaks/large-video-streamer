@@ -10,6 +10,7 @@
     main { width: min(1180px, calc(100% - 32px)); margin: 0 auto; padding: 32px 0 56px; }
     header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 24px; }
     .nav { display: grid; gap: 10px; }
+    .navActions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
     .backLink { justify-self: start; }
     h1 { margin: 0; font-size: clamp(1.8rem, 4vw, 3rem); letter-spacing: -0.04em; }
     button { min-height: 44px; min-width: 44px; border: 1px solid var(--secondary-border); border-radius: var(--radius-pill); background: var(--secondary-bg); color: var(--text); padding: 10px 16px; cursor: pointer; white-space: nowrap; font: inherit; }
@@ -54,7 +55,10 @@
   <main>
     <header>
       <div class="nav">
-        <a class="backLink btn btn--secondary btn--pill" href="/">← Back to library</a>
+        <div class="navActions">
+          <a class="backLink btn btn--secondary btn--pill" href="/">← Back to library</a>
+          <a class="btn btn--secondary btn--pill" href="/admin/shares">Manage shares</a>
+        </div>
         <h1 id="title">Video Player</h1>
       </div>
       <form method="post" action="/logout">
@@ -80,7 +84,7 @@
           <div class="labelControls">
             <div class="fieldGroup">
               <label for="boundaryName">Boundary name</label>
-              <input id="boundaryName" type="text" placeholder="Group name (e.g. group-a)">
+              <input id="boundaryName" name="boundaryName" type="text" placeholder="Group name (e.g. group-a)" autocomplete="off" data-lpignore="true">
             </div>
             <button id="markBtn" type="button">Mark start here</button>
           </div>
@@ -394,6 +398,9 @@
       const modeLabel = document.createElement('label');
       modeLabel.textContent = 'Who can watch';
       const modeSelect = document.createElement('select');
+      modeSelect.name = 'shareMode';
+      modeSelect.setAttribute('autocomplete', 'off');
+      modeSelect.setAttribute('data-lpignore', 'true');
       modeSelect.append(new Option('Single device (default)', 'single', true, true));
       modeSelect.append(new Option('Anyone, unlimited', 'public'));
       modeLabel.append(modeSelect);
@@ -401,7 +408,10 @@
       const expiryLabel = document.createElement('label');
       expiryLabel.textContent = 'Expires (optional)';
       const expiryInput = document.createElement('input');
+      expiryInput.name = 'shareExpiresAt';
       expiryInput.type = 'datetime-local';
+      expiryInput.autocomplete = 'off';
+      expiryInput.setAttribute('data-lpignore', 'true');
       expiryLabel.append(expiryInput);
 
       const actions = document.createElement('div');
@@ -419,8 +429,11 @@
       result.className = 'shareResult';
       result.hidden = true;
       const urlInput = document.createElement('input');
+      urlInput.name = 'shareUrl';
       urlInput.type = 'text';
       urlInput.readOnly = true;
+      urlInput.autocomplete = 'off';
+      urlInput.setAttribute('data-lpignore', 'true');
       urlInput.setAttribute('aria-label', 'Share link');
       const copyBtn = document.createElement('button');
       copyBtn.type = 'button';

@@ -58,6 +58,15 @@ func newShareMux(t *testing.T, cfg config.Config) (*Server, *http.ServeMux) {
 	return srv, mux
 }
 
+func flatShareStore(t *testing.T, srv *Server) *Store {
+	t.Helper()
+	store, ok := srv.store.(*Store)
+	if !ok {
+		t.Fatalf("share server store is %T, want *Store", srv.store)
+	}
+	return store
+}
+
 // writeHLSShow writes a 5×6s VOD playlist and its segment files under HLSDir.
 func writeHLSShow(t *testing.T, cfg config.Config, show string) {
 	t.Helper()
@@ -182,6 +191,185 @@ func TestCreateAuthenticatedReturnsToken(t *testing.T) {
 	}
 	if len(sh.Segments) != 3 { // seg_0002, seg_0003, seg_0004 overlap [12,30)
 		t.Fatalf("segments = %v, want 3", sh.Segments)
+	}
+}
+
+// --- owner management ------------------------------------------------------
+
+func TestAdminSharesRequireAuth(t *testing.T) {
+	cfg := testConfig(t)
+	_, mux := newShareMux(t, cfg)
+	hash := strings.Repeat("a", 64)
+
+	for _, tc := range []struct {
+		method string
+		path   string
+	}{
+		{http.MethodGet, "/admin/shares"},
+		{http.MethodPost, "/admin/shares/" + hash + "/revoke"},
+		{http.MethodPost, "/admin/shares/" + hash + "/delete"},
+	} {
+		rec := do(t, mux, tc.method, tc.path, "")
+		if rec.Code != http.StatusFound {
+			t.Fatalf("%s %s status = %d, want 302", tc.method, tc.path, rec.Code)
+		}
+		if loc := rec.Header().Get("Location"); loc != "/login" {
+			t.Fatalf("%s %s redirect = %q, want /login", tc.method, tc.path, loc)
+		}
+	}
+}
+
+func TestAdminSharesListTimestampsAndStatus(t *testing.T) {
+	cfg := testConfig(t)
+	srv, mux := newShareMux(t, cfg)
+	cookies := ownerCookies(t, mux)
+
+	base := time.Date(2026, 7, 7, 12, 30, 0, 0, time.UTC)
+	claimed := base.Add(time.Hour)
+	expiredAt := base.Add(-time.Hour)
+	activeExpiresAt := base.Add(24 * time.Hour)
+	revokedAt := base.Add(2 * time.Hour)
+
+	activeToken, err := srv.store.Create(CreateParams{
+		Show: "demo", ChapterName: "Active Chapter", Mode: ModeSingle, ExpiresAt: &activeExpiresAt,
+	})
+	if err != nil {
+		t.Fatalf("create active share: %v", err)
+	}
+	expiredToken, err := srv.store.Create(CreateParams{
+		Show: "demo", ChapterName: "Expired Chapter", Mode: ModePublic, ExpiresAt: &expiredAt,
+	})
+	if err != nil {
+		t.Fatalf("create expired share: %v", err)
+	}
+	revokedToken, err := srv.store.Create(CreateParams{
+		Show: "demo", ChapterName: "Revoked Chapter", Mode: ModePublic,
+	})
+	if err != nil {
+		t.Fatalf("create revoked share: %v", err)
+	}
+
+	store := flatShareStore(t, srv)
+	store.mu.Lock()
+	store.byHash[sha256hex(activeToken)].CreatedAt = base
+	store.byHash[sha256hex(activeToken)].ClaimedAt = &claimed
+	store.byHash[sha256hex(expiredToken)].CreatedAt = base.Add(time.Minute)
+	store.byHash[sha256hex(revokedToken)].CreatedAt = base.Add(2 * time.Minute)
+	store.byHash[sha256hex(revokedToken)].RevokedAt = &revokedAt
+	store.mu.Unlock()
+
+	rec := do(t, mux, http.MethodGet, "/admin/shares", "", cookies...)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("admin shares status = %d, want 200; body %q", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	for _, want := range []string{
+		"Active Chapter", "Expired Chapter", "Revoked Chapter",
+		"demo", "single", "public",
+		"2026-07-07 12:30 UTC", "2026-07-07 13:30 UTC", "2026-07-07 11:30 UTC", "2026-07-08 12:30 UTC",
+		"Claimed/device registered", "Active", "Expired", "Revoked", "Revoke", "Delete",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("admin page missing %q in body: %q", want, body)
+		}
+	}
+}
+
+func TestAdminShareMutationsRevokeDeleteAndPRG(t *testing.T) {
+	cfg := testConfig(t)
+	srv, mux := newShareMux(t, cfg)
+	cookies := ownerCookies(t, mux)
+
+	revokeToken := newPublicShare(t, srv, "demo")
+	if rec := do(t, mux, http.MethodGet, "/s/"+revokeToken, ""); rec.Code != http.StatusOK {
+		t.Fatalf("pre-revoke viewer status = %d, want 200", rec.Code)
+	}
+	if rec := do(t, mux, http.MethodGet, "/s/"+revokeToken+"/playlist.m3u8", ""); rec.Code != http.StatusOK {
+		t.Fatalf("pre-revoke playlist status = %d, want 200", rec.Code)
+	}
+	rec := do(t, mux, http.MethodPost, "/admin/shares/"+sha256hex(revokeToken)+"/revoke", "", cookies...)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("revoke status = %d, want 303", rec.Code)
+	}
+	if loc := rec.Header().Get("Location"); loc != "/admin/shares" {
+		t.Fatalf("revoke redirect = %q, want /admin/shares", loc)
+	}
+	if rec := do(t, mux, http.MethodGet, "/s/"+revokeToken, ""); rec.Code != http.StatusNotFound {
+		t.Fatalf("revoked viewer status = %d, want 404", rec.Code)
+	}
+	if rec := do(t, mux, http.MethodGet, "/s/"+revokeToken+"/playlist.m3u8", ""); rec.Code != http.StatusNotFound {
+		t.Fatalf("revoked playlist status = %d, want 404", rec.Code)
+	}
+
+	deleteToken := newPublicShare(t, srv, "demo")
+	if rec := do(t, mux, http.MethodGet, "/s/"+deleteToken, ""); rec.Code != http.StatusOK {
+		t.Fatalf("pre-delete viewer status = %d, want 200", rec.Code)
+	}
+	if rec := do(t, mux, http.MethodGet, "/s/"+deleteToken+"/playlist.m3u8", ""); rec.Code != http.StatusOK {
+		t.Fatalf("pre-delete playlist status = %d, want 200", rec.Code)
+	}
+	rec = do(t, mux, http.MethodPost, "/admin/shares/"+sha256hex(deleteToken)+"/delete", "", cookies...)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("delete status = %d, want 303", rec.Code)
+	}
+	if loc := rec.Header().Get("Location"); loc != "/admin/shares" {
+		t.Fatalf("delete redirect = %q, want /admin/shares", loc)
+	}
+	if _, ok := srv.store.Get(deleteToken); ok {
+		t.Fatal("deleted share still present in store")
+	}
+	if rec := do(t, mux, http.MethodGet, "/s/"+deleteToken, ""); rec.Code != http.StatusNotFound {
+		t.Fatalf("deleted viewer status = %d, want 404", rec.Code)
+	}
+	if rec := do(t, mux, http.MethodGet, "/s/"+deleteToken+"/playlist.m3u8", ""); rec.Code != http.StatusNotFound {
+		t.Fatalf("deleted playlist status = %d, want 404", rec.Code)
+	}
+}
+
+func TestAdminSharesOmitSensitiveFields(t *testing.T) {
+	cfg := testConfig(t)
+	srv, mux := newShareMux(t, cfg)
+	cookies := ownerCookies(t, mux)
+
+	token, err := srv.store.Create(CreateParams{
+		Show:        "demo",
+		ChapterName: "Sensitive Chapter",
+		Mode:        ModeSingle,
+		Segments:    []string{"secret-segment.ts"},
+		Playlist:    "secret-playlist-text",
+	})
+	if err != nil {
+		t.Fatalf("create sensitive share: %v", err)
+	}
+	if !srv.store.Claim(token, "device-secret-value") {
+		t.Fatal("claim sensitive share failed")
+	}
+	sh, ok := srv.store.Get(token)
+	if !ok {
+		t.Fatal("claimed share not found")
+	}
+
+	rec := do(t, mux, http.MethodGet, "/admin/shares", "", cookies...)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("admin shares status = %d, want 200; body %q", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "Sensitive Chapter") {
+		t.Fatalf("admin page missing share row: %q", body)
+	}
+	for _, forbidden := range []string{
+		token,
+		sh.DeviceHash,
+		"device-secret-value",
+		"secret-segment.ts",
+		"secret-playlist-text",
+		"DeviceHash",
+		"Segments",
+		"Playlist",
+	} {
+		if forbidden != "" && strings.Contains(body, forbidden) {
+			t.Fatalf("admin page exposed sensitive value %q in body: %q", forbidden, body)
+		}
 	}
 }
 
@@ -439,10 +627,11 @@ func TestExpiredShareDeniedEvenWithCookie(t *testing.T) {
 	cookie := shareCookie(t, rec)
 
 	// Expire the share server-side.
-	srv.store.mu.Lock()
+	store := flatShareStore(t, srv)
+	store.mu.Lock()
 	past := time.Now().Add(-time.Hour).UTC()
-	srv.store.byHash[sha256hex(token)].ExpiresAt = &past
-	srv.store.mu.Unlock()
+	store.byHash[sha256hex(token)].ExpiresAt = &past
+	store.mu.Unlock()
 
 	if rec := do(t, mux, http.MethodGet, "/s/"+token, "", cookie); rec.Code != http.StatusNotFound {
 		t.Fatalf("expired viewer status = %d, want 404", rec.Code)
@@ -543,7 +732,9 @@ func TestUnknownAndRevokedTokensReturn404(t *testing.T) {
 		t.Fatalf("unknown token status = %d, want 404", rec.Code)
 	}
 	token := newPublicShare(t, srv, "demo")
-	srv.store.Revoke(token)
+	if ok, err := srv.store.RevokeByHash(sha256hex(token)); err != nil || !ok {
+		t.Fatalf("RevokeByHash ok=%v err=%v, want ok with no error", ok, err)
+	}
 	if rec := do(t, mux, http.MethodGet, "/s/"+token, ""); rec.Code != http.StatusNotFound {
 		t.Fatalf("revoked viewer status = %d, want 404", rec.Code)
 	}

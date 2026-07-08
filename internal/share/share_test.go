@@ -87,6 +87,92 @@ func TestStoreRoundTripReload(t *testing.T) {
 	}
 }
 
+func TestCreateGetAndListReturnSnapshots(t *testing.T) {
+	s := tempStore(t)
+	exp := time.Now().Add(time.Hour).UTC().Round(time.Second)
+	origExp := exp
+	segments := []string{"seg_0002.ts"}
+	token, err := s.Create(CreateParams{
+		Show:        "demo",
+		ChapterName: "chap",
+		Segments:    segments,
+		Playlist:    "#EXTM3U\n",
+		Mode:        ModePublic,
+		ExpiresAt:   &exp,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	segments[0] = "mutated.ts"
+	exp = exp.Add(time.Hour)
+	got, ok := s.Get(token)
+	if !ok {
+		t.Fatal("created share missing")
+	}
+	if got.Segments[0] != "seg_0002.ts" {
+		t.Fatalf("Create kept caller-owned segments slice: %v", got.Segments)
+	}
+	if got.ExpiresAt == nil || !got.ExpiresAt.Equal(origExp) {
+		t.Fatalf("Create kept caller-owned expiry pointer: %v, want %v", got.ExpiresAt, origExp)
+	}
+
+	got.Show = "mutated"
+	got.Segments[0] = "changed.ts"
+	*got.ExpiresAt = got.ExpiresAt.Add(time.Hour)
+	again, _ := s.Get(token)
+	if again.Show != "demo" || again.Segments[0] != "seg_0002.ts" || !again.ExpiresAt.Equal(origExp) {
+		t.Fatalf("Get did not return a deep snapshot: %#v", again)
+	}
+
+	listed := s.List()
+	if len(listed) != 1 {
+		t.Fatalf("List returned %d summaries, want 1", len(listed))
+	}
+	*listed[0].ExpiresAt = listed[0].ExpiresAt.Add(time.Hour)
+	listedAgain := s.List()
+	if listedAgain[0].ExpiresAt == nil || !listedAgain[0].ExpiresAt.Equal(origExp) {
+		t.Fatalf("List did not return a snapshot expiry: %v", listedAgain[0].ExpiresAt)
+	}
+}
+
+func TestListIncludesAllSharesSortedByCreatedAtThenHash(t *testing.T) {
+	base := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	expired := base.Add(-time.Hour)
+	claimed := base.Add(-30 * time.Minute)
+	revoked := base.Add(-15 * time.Minute)
+	s := &Store{
+		byHash: map[string]*Share{
+			"b": {TokenHash: "b", Show: "revoked", Mode: ModePublic, RevokedAt: &revoked, CreatedAt: base},
+			"a": {TokenHash: "a", Show: "expired", Mode: ModeSingle, ExpiresAt: &expired, CreatedAt: base},
+			"c": {TokenHash: "c", Show: "claimed", Mode: ModeSingle, ClaimedAt: &claimed, CreatedAt: base.Add(-time.Minute)},
+		},
+	}
+
+	got := s.List()
+	if len(got) != 3 {
+		t.Fatalf("List returned %d summaries, want 3", len(got))
+	}
+	wantHashes := []string{"c", "a", "b"}
+	for i, want := range wantHashes {
+		if got[i].TokenHash != want {
+			t.Fatalf("List order hashes = %v, want %v", []string{got[0].TokenHash, got[1].TokenHash, got[2].TokenHash}, wantHashes)
+		}
+	}
+	if got[1].ExpiresAt == nil || got[2].RevokedAt == nil {
+		t.Fatalf("List omitted expired/revoked records: %#v", got)
+	}
+
+	got[0].Show = "mutated"
+	*got[0].ClaimedAt = got[0].ClaimedAt.Add(time.Hour)
+	*got[1].ExpiresAt = got[1].ExpiresAt.Add(time.Hour)
+	*got[2].RevokedAt = got[2].RevokedAt.Add(time.Hour)
+	again := s.List()
+	if again[0].Show != "claimed" || !again[0].ClaimedAt.Equal(claimed) || !again[1].ExpiresAt.Equal(expired) || !again[2].RevokedAt.Equal(revoked) {
+		t.Fatalf("List summaries were not independent snapshots: %#v", again)
+	}
+}
+
 func TestCorruptStoreStartsEmpty(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "shares.json")
 	if err := os.WriteFile(path, []byte("{ this is not valid json"), 0o600); err != nil {
@@ -210,6 +296,110 @@ func TestRevokeIsIdempotentAndDenies(t *testing.T) {
 	}
 }
 
+func TestRevokeByHashAndDeleteByHashPersist(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "shares.json")
+	s := newStore(path)
+	revokeToken, err := s.Create(CreateParams{Show: "demo", ChapterName: "revoke", Mode: ModePublic})
+	if err != nil {
+		t.Fatalf("Create revoke share: %v", err)
+	}
+	deleteToken, err := s.Create(CreateParams{Show: "demo", ChapterName: "delete", Mode: ModePublic})
+	if err != nil {
+		t.Fatalf("Create delete share: %v", err)
+	}
+
+	ok, err := s.RevokeByHash(sha256hex(revokeToken))
+	if err != nil || !ok {
+		t.Fatalf("RevokeByHash ok=%v err=%v, want ok with no error", ok, err)
+	}
+	ok, err = s.RevokeByHash(sha256hex(revokeToken))
+	if err != nil || !ok {
+		t.Fatalf("idempotent RevokeByHash ok=%v err=%v, want ok with no error", ok, err)
+	}
+	reloaded := newStore(path)
+	revoked, ok := reloaded.Get(revokeToken)
+	if !ok || revoked.RevokedAt == nil {
+		t.Fatalf("reloaded revoked share = %#v, ok=%v", revoked, ok)
+	}
+
+	ok, err = s.DeleteByHash(sha256hex(deleteToken))
+	if err != nil || !ok {
+		t.Fatalf("DeleteByHash ok=%v err=%v, want ok with no error", ok, err)
+	}
+	if _, ok := s.Get(deleteToken); ok {
+		t.Fatal("deleted share is still present in memory")
+	}
+	reloaded = newStore(path)
+	if _, ok := reloaded.Get(deleteToken); ok {
+		t.Fatal("deleted share was still present after reload")
+	}
+	if _, ok := reloaded.Get(revokeToken); !ok {
+		t.Fatal("deleting one share removed another share")
+	}
+
+	ok, err = s.RevokeByHash("missing")
+	if err != nil || ok {
+		t.Fatalf("missing RevokeByHash ok=%v err=%v, want false with no error", ok, err)
+	}
+	ok, err = s.DeleteByHash("missing")
+	if err != nil || ok {
+		t.Fatalf("missing DeleteByHash ok=%v err=%v, want false with no error", ok, err)
+	}
+}
+
+func TestRevokeRollsBackOnPersistFailure(t *testing.T) {
+	s := tempStore(t)
+	token, err := s.Create(CreateParams{Show: "demo", ChapterName: "c", Mode: ModePublic})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	s.path = directoryPersistenceTarget(t, s.path)
+
+	s.Revoke(token)
+	got, ok := s.Get(token)
+	if !ok {
+		t.Fatal("share missing after failed revoke")
+	}
+	if got.RevokedAt != nil {
+		t.Fatalf("failed Revoke left in-memory RevokedAt set: %v", got.RevokedAt)
+	}
+}
+
+func TestRevokeByHashRollsBackOnPersistFailure(t *testing.T) {
+	s := tempStore(t)
+	token, err := s.Create(CreateParams{Show: "demo", ChapterName: "c", Mode: ModePublic})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	s.path = directoryPersistenceTarget(t, s.path)
+
+	ok, err := s.RevokeByHash(sha256hex(token))
+	if err == nil || !ok {
+		t.Fatalf("RevokeByHash ok=%v err=%v, want ok with persistence error", ok, err)
+	}
+	got, _ := s.Get(token)
+	if got.RevokedAt != nil {
+		t.Fatalf("failed RevokeByHash left in-memory RevokedAt set: %v", got.RevokedAt)
+	}
+}
+
+func TestDeleteByHashRollsBackOnPersistFailure(t *testing.T) {
+	s := tempStore(t)
+	token, err := s.Create(CreateParams{Show: "demo", ChapterName: "c", Mode: ModePublic})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	s.path = directoryPersistenceTarget(t, s.path)
+
+	ok, err := s.DeleteByHash(sha256hex(token))
+	if err == nil || !ok {
+		t.Fatalf("DeleteByHash ok=%v err=%v, want ok with persistence error", ok, err)
+	}
+	if _, ok := s.Get(token); !ok {
+		t.Fatal("failed DeleteByHash did not restore in-memory record")
+	}
+}
+
 func TestDeviceMatchesEmptyInputs(t *testing.T) {
 	if (&Share{}).DeviceMatches("anything") {
 		t.Fatal("unclaimed share (no DeviceHash) must not match any device")
@@ -221,4 +411,13 @@ func TestDeviceMatchesEmptyInputs(t *testing.T) {
 	if !sh.DeviceMatches("secret") {
 		t.Fatal("correct device secret should match")
 	}
+}
+
+func directoryPersistenceTarget(t *testing.T, currentPath string) string {
+	t.Helper()
+	target := filepath.Join(filepath.Dir(currentPath), "persist-target-directory")
+	if err := os.Mkdir(target, 0o700); err != nil {
+		t.Fatalf("create persistence failure target: %v", err)
+	}
+	return target
 }

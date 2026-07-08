@@ -140,19 +140,19 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
         <p class="help">Review detected silences, then promote useful ones into named boundaries or reject noise.</p>
         <div class="candidate-tools" aria-label="Candidate filters">
           <label for="candidate-sort">Sort
-            <select id="candidate-sort">
+            <select id="candidate-sort" name="candidate-sort" autocomplete="off" data-lpignore="true">
               <option value="duration-desc">Duration, longest first</option>
               <option value="time-asc">Time, earliest first</option>
             </select>
           </label>
-          <label><input type="checkbox" id="hide-handled" checked> Hide promoted/rejected</label>
+          <label><input type="checkbox" id="hide-handled" name="hide-handled" data-lpignore="true" checked> Hide promoted/rejected</label>
           <label for="min-duration">Hide shorter than
-            <input id="min-duration" type="number" min="0" step="0.1" value="0" inputmode="decimal"> seconds
+            <input id="min-duration" name="min-duration" type="number" min="0" step="0.1" value="0" inputmode="decimal" autocomplete="off" data-lpignore="true"> seconds
           </label>
         </div>
         <div class="bulk-actions" aria-label="Bulk candidate actions">
           <label for="bulk-name">Bulk boundary name
-            <input id="bulk-name" value="group-a" autocomplete="off">
+            <input id="bulk-name" name="bulk-name" type="text" value="group-a" autocomplete="off" data-lpignore="true">
           </label>
           <button id="bulk-promote" class="secondary mutating-control" disabled>Promote selected</button>
           <button id="bulk-reject" class="danger mutating-control" disabled>Reject selected</button>
@@ -160,7 +160,7 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
         <p class="help" id="candidate-count"></p>
         <div class="table-wrap candidate-table-wrap">
           <table class="candidate-table">
-            <thead><tr><th><input type="checkbox" id="select-all-candidates" aria-label="Select all visible pending candidates"></th><th>Time</th><th>Duration</th><th>Status</th><th>Actions</th></tr></thead>
+            <thead><tr><th><input type="checkbox" id="select-all-candidates" name="select-all-candidates" aria-label="Select all visible pending candidates" data-lpignore="true"></th><th>Time</th><th>Duration</th><th>Status</th><th>Actions</th></tr></thead>
             <tbody id="candidates"></tbody>
           </table>
         </div>
@@ -170,7 +170,7 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
       <h2>Plain-text timestamps</h2>
       <label class="field-label" for="timestamps">Plain-text boundaries for Export and Import</label>
       <p class="help">Use this box to copy boundaries out or paste edited boundaries back in. The format starts with a video header, then one boundary name and time per line.</p>
-      <textarea id="timestamps" placeholder="&gt; {{.Show}}.mkv&#10;group-a 00:02:05"></textarea>
+      <textarea id="timestamps" name="timestamps" autocomplete="off" data-lpignore="true" placeholder="&gt; {{.Show}}.mkv&#10;group-a 00:02:05"></textarea>
     </section>
   </main>
   <script src="/static/hls.min.js"></script>
@@ -452,7 +452,7 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
       boundaries.innerHTML = '';
       labels.boundaries.forEach((boundary, index) => {
         const row = document.createElement('tr');
-        row.innerHTML = '<td><input class="editable-control" value="' + escapeAttr(boundary.name || '') + '" aria-label="Boundary name"></td><td><input class="editable-control" value="' + secondsToClock(boundary.start) + '" aria-label="Boundary start"></td><td><div class="row-actions"><button class="secondary preview">Preview</button><button class="danger delete mutating-control">Delete</button></div></td>';
+        row.innerHTML = '<td><input type="text" class="editable-control" name="boundary-name-' + index + '" autocomplete="off" data-lpignore="true" value="' + escapeAttr(boundary.name || '') + '" aria-label="Boundary name"></td><td><input type="text" class="editable-control" name="boundary-time-' + index + '" autocomplete="off" data-lpignore="true" value="' + secondsToClock(boundary.start) + '" aria-label="Boundary start"></td><td><div class="row-actions"><button class="secondary preview">Preview</button><button class="danger delete mutating-control">Delete</button></div></td>';
         const inputs = row.querySelectorAll('input');
         inputs[0].addEventListener('input', () => { boundary.name = inputs[0].value; setDirty(true); });
         inputs[1].addEventListener('input', () => { try { boundary.start = clockToSeconds(inputs[1].value); setDirty(true); setStatus(''); } catch (err) { setStatus(err.message); } });
@@ -484,8 +484,8 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
           const checked = selectedCandidates.has(item.key) ? ' checked' : '';
           const handled = isHandledCandidate(candidate);
           const disabled = handled ? ' disabled' : '';
-          const pendingActions = handled ? '<span class="help">Handled</span>' : '<label><span class="sr-only">Boundary name for candidate at ' + secondsToClock(candidate.time) + '</span><input class="inline-name editable-control" value="group-a" aria-label="Boundary name for candidate at ' + secondsToClock(candidate.time) + '"></label><button class="promote mutating-control">Promote</button><button class="danger reject mutating-control">Reject</button>';
-          row.innerHTML = '<td><input type="checkbox" class="candidate-select" aria-label="Select candidate at ' + secondsToClock(candidate.time) + '"' + checked + disabled + '></td><td>' + secondsToClock(candidate.time) + '</td><td>' + Number(candidate.duration || 0).toFixed(2) + 's</td><td>' + escapeText(candidateStatus(candidate)) + '</td><td><div class="row-actions"><button class="secondary preview">Preview</button>' + pendingActions + '</div></td>';
+          const pendingActions = handled ? '<span class="help">Handled</span>' : '<label><span class="sr-only">Boundary name for candidate at ' + secondsToClock(candidate.time) + '</span><input type="text" class="inline-name editable-control" name="candidate-boundary-name-' + item.index + '" autocomplete="off" data-lpignore="true" value="group-a" aria-label="Boundary name for candidate at ' + secondsToClock(candidate.time) + '"></label><button class="promote mutating-control">Promote</button><button class="danger reject mutating-control">Reject</button>';
+          row.innerHTML = '<td><input type="checkbox" class="candidate-select" name="candidate-select-' + item.index + '" aria-label="Select candidate at ' + secondsToClock(candidate.time) + '" data-lpignore="true"' + checked + disabled + '></td><td>' + secondsToClock(candidate.time) + '</td><td>' + Number(candidate.duration || 0).toFixed(2) + 's</td><td>' + escapeText(candidateStatus(candidate)) + '</td><td><div class="row-actions"><button class="secondary preview">Preview</button>' + pendingActions + '</div></td>';
           const checkbox = row.querySelector('.candidate-select');
           checkbox.addEventListener('change', () => {
             if (checkbox.checked) selectedCandidates.add(item.key);
@@ -656,17 +656,22 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
 
 // RegisterRoutes wires the label UI and JSON API endpoints into mux.
 func (s *Store) RegisterRoutes(mux *http.ServeMux, a *auth.Authenticator) {
-	mux.Handle("GET /labels/{show}", a.RequirePage(http.HandlerFunc(s.handleLabelsPage)))
-	mux.Handle("GET /labels/api/{show}", a.RequireMedia(http.HandlerFunc(s.handleLabelsGet)))
-	mux.Handle("POST /labels/api/{show}", a.RequireMedia(http.HandlerFunc(s.handleLabelsPost)))
-	mux.Handle("POST /labels/api/{show}/import", a.RequireMedia(http.HandlerFunc(s.handleLabelsImport)))
-	mux.Handle("GET /labels/api/{show}/export", a.RequireMedia(http.HandlerFunc(s.handleLabelsExport)))
-	mux.Handle("POST /labels/api/{show}/mkv/import", a.RequireMedia(http.HandlerFunc(s.handleMKVImport)))
-	mux.Handle("POST /labels/api/{show}/mkv/embed", a.RequireMedia(http.HandlerFunc(s.handleMKVEmbed)))
-	mux.Handle("POST /labels/api/{show}/detect", a.RequireMedia(http.HandlerFunc(s.handleDetect)))
+	NewServer(s.cfg, s).RegisterRoutes(mux, a)
 }
 
-func (s *Store) handleLabelsPage(w http.ResponseWriter, r *http.Request) {
+// RegisterRoutes wires the label UI and JSON API endpoints into mux.
+func (srv *Server) RegisterRoutes(mux *http.ServeMux, a *auth.Authenticator) {
+	mux.Handle("GET /labels/{show}", a.RequirePage(http.HandlerFunc(srv.handleLabelsPage)))
+	mux.Handle("GET /labels/api/{show}", a.RequireMedia(http.HandlerFunc(srv.handleLabelsGet)))
+	mux.Handle("POST /labels/api/{show}", a.RequireMedia(http.HandlerFunc(srv.handleLabelsPost)))
+	mux.Handle("POST /labels/api/{show}/import", a.RequireMedia(http.HandlerFunc(srv.handleLabelsImport)))
+	mux.Handle("GET /labels/api/{show}/export", a.RequireMedia(http.HandlerFunc(srv.handleLabelsExport)))
+	mux.Handle("POST /labels/api/{show}/mkv/import", a.RequireMedia(http.HandlerFunc(srv.handleMKVImport)))
+	mux.Handle("POST /labels/api/{show}/mkv/embed", a.RequireMedia(http.HandlerFunc(srv.handleMKVEmbed)))
+	mux.Handle("POST /labels/api/{show}/detect", a.RequireMedia(http.HandlerFunc(srv.handleDetect)))
+}
+
+func (srv *Server) handleLabelsPage(w http.ResponseWriter, r *http.Request) {
 	show, ok := validShowFromRequest(w, r)
 	if !ok {
 		return
@@ -677,12 +682,12 @@ func (s *Store) handleLabelsPage(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Store) handleLabelsGet(w http.ResponseWriter, r *http.Request) {
+func (srv *Server) handleLabelsGet(w http.ResponseWriter, r *http.Request) {
 	show, ok := validShowFromRequest(w, r)
 	if !ok {
 		return
 	}
-	labels, err := s.Load(show)
+	labels, err := srv.store.Load(show)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -690,7 +695,7 @@ func (s *Store) handleLabelsGet(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, labels)
 }
 
-func (s *Store) handleLabelsPost(w http.ResponseWriter, r *http.Request) {
+func (srv *Server) handleLabelsPost(w http.ResponseWriter, r *http.Request) {
 	show, ok := validShowFromRequest(w, r)
 	if !ok {
 		return
@@ -706,20 +711,20 @@ func (s *Store) handleLabelsPost(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := s.saveAndWriteChapters(labels); err != nil {
+	if err := srv.saveAndWriteChapters(labels); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (s *Store) handleLabelsImport(w http.ResponseWriter, r *http.Request) {
+func (srv *Server) handleLabelsImport(w http.ResponseWriter, r *http.Request) {
 	show, ok := validShowFromRequest(w, r)
 	if !ok {
 		return
 	}
 	defer r.Body.Close()
-	labels, err := s.ImportTimestamps(r.Body)
+	labels, err := importTimestamps(r.Body)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -729,62 +734,62 @@ func (s *Store) handleLabelsImport(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := s.saveAndWriteChapters(labels); err != nil {
+	if err := srv.saveAndWriteChapters(labels); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, labels)
 }
 
-func (s *Store) handleLabelsExport(w http.ResponseWriter, r *http.Request) {
+func (srv *Server) handleLabelsExport(w http.ResponseWriter, r *http.Request) {
 	show, ok := validShowFromRequest(w, r)
 	if !ok {
 		return
 	}
-	labels, err := s.Load(show)
+	labels, err := srv.store.Load(show)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	_, _ = io.WriteString(w, s.ExportTimestamps(labels))
+	_, _ = io.WriteString(w, exportTimestamps(labels))
 }
 
-func (s *Store) handleMKVImport(w http.ResponseWriter, r *http.Request) {
+func (srv *Server) handleMKVImport(w http.ResponseWriter, r *http.Request) {
 	show, ok := validShowFromRequest(w, r)
 	if !ok {
 		return
 	}
-	labels, err := s.Load(show)
+	labels, err := srv.store.Load(show)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	boundaries, err := s.ImportMKVChapters(filepath.Join(s.cfg.VideoDir, show+".mkv"))
+	boundaries, err := importMKVChapters(filepath.Join(srv.cfg.VideoDir, show+".mkv"))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	labels.Boundaries = sortedBoundaries(append(labels.Boundaries, boundaries...))
 	labels.Video = show
-	if err := s.saveAndWriteChapters(labels); err != nil {
+	if err := srv.saveAndWriteChapters(labels); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, labels)
 }
 
-func (s *Store) handleMKVEmbed(w http.ResponseWriter, r *http.Request) {
+func (srv *Server) handleMKVEmbed(w http.ResponseWriter, r *http.Request) {
 	show, ok := validShowFromRequest(w, r)
 	if !ok {
 		return
 	}
-	labels, err := s.Load(show)
+	labels, err := srv.store.Load(show)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if err := s.ExportMKVChapters(filepath.Join(s.cfg.VideoDir, show+".mkv"), labels.Boundaries); err != nil {
+	if err := exportMKVChapters(filepath.Join(srv.cfg.VideoDir, show+".mkv"), labels.Boundaries); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -796,17 +801,17 @@ func (s *Store) handleMKVEmbed(w http.ResponseWriter, r *http.Request) {
 // existing user decisions (candidates already promoted/rejected) and only adds
 // newly detected times that don't coincide with a kept candidate. Candidates do
 // not affect chapters.vtt until promoted to boundaries, so we only Save here.
-func (s *Store) handleDetect(w http.ResponseWriter, r *http.Request) {
+func (srv *Server) handleDetect(w http.ResponseWriter, r *http.Request) {
 	show, ok := validShowFromRequest(w, r)
 	if !ok {
 		return
 	}
-	labels, err := s.Load(show)
+	labels, err := srv.store.Load(show)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	silences, err := detect.DetectSilence(filepath.Join(s.cfg.VideoDir, show+".mkv"), detect.DefaultNoiseDB, detect.DefaultMinDur)
+	silences, err := detect.DetectSilence(filepath.Join(srv.cfg.VideoDir, show+".mkv"), detect.DefaultNoiseDB, detect.DefaultMinDur)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -817,7 +822,7 @@ func (s *Store) handleDetect(w http.ResponseWriter, r *http.Request) {
 	}
 	labels.Candidates = mergeCandidates(labels.Candidates, detected)
 	labels.Video = show
-	if err := s.Save(labels); err != nil {
+	if err := srv.store.Save(labels); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -879,15 +884,15 @@ func validateBoundaryNames(boundaries []Boundary) error {
 	return nil
 }
 
-func (s *Store) saveAndWriteChapters(labels VideoLabels) error {
-	if err := s.Save(labels); err != nil {
+func (srv *Server) saveAndWriteChapters(labels VideoLabels) error {
+	if err := srv.store.Save(labels); err != nil {
 		return err
 	}
-	dir := filepath.Join(s.cfg.HLSDir, labels.Video)
+	dir := filepath.Join(srv.cfg.HLSDir, labels.Video)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, "chapters.vtt"), []byte(s.ToWebVTT(labels)), 0o644)
+	return os.WriteFile(filepath.Join(dir, "chapters.vtt"), []byte(toWebVTT(labels)), 0o644)
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {

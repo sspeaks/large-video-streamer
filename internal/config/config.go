@@ -12,21 +12,24 @@ import (
 
 // Config contains all runtime settings consumed by the application.
 type Config struct {
-	ListenAddr     string // default 127.0.0.1:8080 ; env LISTEN_ADDR
-	VideoDir       string // source folder of .mkv files (read-only) ; env VIDEO_DIR
-	HLSDir         string // writable dir for generated HLS output ; env HLS_DIR (default StateDir/hls)
-	LoginUser      string // env LOGIN_USER or file at LOGIN_USER_FILE
-	LoginPass      string // env LOGIN_PASS or file at LOGIN_PASS_FILE
-	CookieSecret   []byte // base64 from COOKIE_SECRET or file at COOKIE_SECRET_FILE ; must decode >=32 bytes
-	NoAuth         bool   // env VIDSTREAMER_DEV_NOAUTH=1/true disables auth for local development
-	SegmentOnStart bool   // env VIDSTREAMER_SEGMENT_ON_START=1/true segments videos at startup
-	StateDir       string // writable dir for server state (cookie-secret, shares.json) ; STATE_DIRECTORY env else parent of HLSDir
+	ListenAddr       string // default 127.0.0.1:8080 ; env LISTEN_ADDR
+	VideoDir         string // source folder of .mkv files (read-only) ; env VIDEO_DIR
+	HLSDir           string // writable dir for generated HLS output ; env HLS_DIR (default StateDir/hls)
+	LoginUser        string // env LOGIN_USER or file at LOGIN_USER_FILE
+	LoginPass        string // env LOGIN_PASS or file at LOGIN_PASS_FILE
+	CookieSecret     []byte // base64 from COOKIE_SECRET or file at COOKIE_SECRET_FILE ; must decode >=32 bytes
+	NoAuth           bool   // env VIDSTREAMER_DEV_NOAUTH=1/true disables auth for local development
+	SegmentOnStart   bool   // env VIDSTREAMER_SEGMENT_ON_START=1/true segments videos at startup
+	StateDir         string // writable dir for server state (cookie-secret, shares.json, app.db) ; STATE_DIRECTORY env else parent of HLSDir
+	DBPath           string // SQLite database path ; env DB_PATH (default StateDir/app.db)
+	UseFlatFileState bool   // env VIDSTREAMER_FLAT_FILE_STATE=1/true uses legacy flat-file stores instead of SQLite
 }
 
 // Load reads environment configuration, applies defaults, and validates required settings.
 func Load() (Config, error) {
 	noAuth := truthyEnv("VIDSTREAMER_DEV_NOAUTH")
 	segmentOnStart := truthyEnv("VIDSTREAMER_SEGMENT_ON_START")
+	useFlatFileState := truthyEnv("VIDSTREAMER_FLAT_FILE_STATE")
 	var loginUser, loginPass string
 	var cookieSecret []byte
 	var validationErrs []error
@@ -52,11 +55,16 @@ func Load() (Config, error) {
 
 	// Resolve the writable state directory unconditionally (independent of the
 	// auth branch) so it is populated even in NoAuth mode. This is the same
-	// directory that holds the persisted cookie-secret and, now, shares.json:
+	// directory that holds persisted server state such as cookie-secret,
+	// shares.json, and app.db:
 	// STATE_DIRECTORY when set by systemd, otherwise the parent of hlsDir.
 	stateDir := os.Getenv("STATE_DIRECTORY")
 	if stateDir == "" {
 		stateDir = filepath.Dir(hlsDir)
+	}
+	dbPath := os.Getenv("DB_PATH")
+	if dbPath == "" {
+		dbPath = filepath.Join(stateDir, "app.db")
 	}
 
 	if noAuth {
@@ -100,15 +108,17 @@ func Load() (Config, error) {
 	}
 
 	return Config{
-		ListenAddr:     listenAddr,
-		VideoDir:       videoDir,
-		HLSDir:         hlsDir,
-		LoginUser:      loginUser,
-		LoginPass:      loginPass,
-		CookieSecret:   cookieSecret,
-		NoAuth:         noAuth,
-		SegmentOnStart: segmentOnStart,
-		StateDir:       stateDir,
+		ListenAddr:       listenAddr,
+		VideoDir:         videoDir,
+		HLSDir:           hlsDir,
+		LoginUser:        loginUser,
+		LoginPass:        loginPass,
+		CookieSecret:     cookieSecret,
+		NoAuth:           noAuth,
+		SegmentOnStart:   segmentOnStart,
+		StateDir:         stateDir,
+		DBPath:           dbPath,
+		UseFlatFileState: useFlatFileState,
 	}, nil
 }
 
