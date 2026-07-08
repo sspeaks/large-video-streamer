@@ -116,6 +116,32 @@ func TestPlayerMarksNonCredentialInputsForPasswordManagers(t *testing.T) {
 	}
 }
 
+func TestPlayerAllowsRenamingChaptersInline(t *testing.T) {
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/player?show=demo", nil)
+
+	Player().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("Player() status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	body := rec.Body.String()
+	wants := []string{
+		"renameChapter",
+		"beginRename",
+		"commitRename",
+		"'Rename ' + cue.label + ' chapter'",
+	}
+	for _, want := range wants {
+		if !strings.Contains(body, want) {
+			t.Fatalf("Player() body does not contain %q for inline chapter rename", want)
+		}
+	}
+	if strings.Contains(body, "removeChapter") {
+		t.Fatalf("Player() body still references removeChapter; delete is handled on the labels page")
+	}
+}
+
 func TestHandlerServesVendoredHLS(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/static/hls.min.js", nil)
