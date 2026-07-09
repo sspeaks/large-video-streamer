@@ -20,6 +20,8 @@
     video { display: block; width: 100%; max-height: 72vh; background: var(--bg-deep); border-radius: var(--radius); }
     #message { margin-top: 14px; color: var(--text-muted); }
     #message.error { color: var(--error-text); }
+    .markStatus { margin-top: 12px; padding: 10px 14px; border-radius: var(--radius); background: var(--secondary-bg); border: 1px solid var(--accent); color: var(--text); font-size: 0.95rem; }
+    .markStatus[hidden] { display: none; }
     .panel h2 { margin: 0 0 12px; font-size: 1.1rem; }
     #chapters { display: grid; gap: 8px; }
     .chapterRow { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 8px; align-items: stretch; }
@@ -47,6 +49,7 @@
     details.shortcuts summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; font-weight: 700; color: var(--text); }
     details.shortcuts ul { margin: 8px 0 0; padding-left: 1.2rem; line-height: 1.7; }
     details.shortcuts kbd { background: var(--surface-input); border: 1px solid var(--secondary-border); border-radius: var(--radius-sm); padding: 1px 6px; font-family: var(--font-mono); font-size: 0.85em; }
+    .shortcutsToggle { margin-top: 14px; font-size: 0.9rem; }
     .labelControls { display: flex; align-items: end; gap: 8px; flex-wrap: wrap; }
     .fieldGroup { flex: 1 1 180px; display: grid; gap: 6px; }
     .fieldGroup label { font-size: 0.9rem; font-weight: 700; color: var(--text); }
@@ -78,6 +81,8 @@
       <section class="panel">
         <video id="video" controls playsinline></video>
         <div id="message" role="status">Preparing player…</div>
+        <div id="markStatus" class="markStatus" role="status" aria-live="polite" hidden></div>
+        <button id="shortcutsToggle" type="button" class="shortcutsToggle" aria-controls="shortcuts-help">⌨ Keyboard shortcuts (press ?)</button>
       </section>
 
       <div id="showPanels" class="stack" hidden>
@@ -126,6 +131,7 @@
     const chaptersEl = document.getElementById('chapters');
     const boundaryNameEl = document.getElementById('boundaryName');
     const labelMsgEl = document.getElementById('labelMsg');
+    const markStatusEl = document.getElementById('markStatus');
     const editLabelsEl = document.getElementById('editLabels');
     let chapterCues = [];
     let nativeChapterTrack = null;
@@ -154,6 +160,30 @@
       labelMsgEl.classList.toggle('error', Boolean(isError));
     }
 
+    // Focus an element without letting the browser scroll it into view, so marking a
+    // boundary keeps the video in frame. preventScroll is unreliable on some Safari/iOS
+    // versions, so we also restore the scroll position as a fallback.
+    function focusWithoutScroll(el) {
+      if (!el) return;
+      const x = window.scrollX, y = window.scrollY;
+      try { el.focus({ preventScroll: true }); }
+      catch (_) { el.focus(); }
+      if (window.scrollX !== x || window.scrollY !== y) window.scrollTo(x, y);
+    }
+
+    // Near-video status line so the user is not typing blind while the video stays in frame.
+    function showMarkStatus(text) {
+      if (!markStatusEl) return;
+      markStatusEl.textContent = text;
+      markStatusEl.hidden = false;
+    }
+
+    function hideMarkStatus() {
+      if (!markStatusEl) return;
+      markStatusEl.textContent = '';
+      markStatusEl.hidden = true;
+    }
+
     function clearBoundaryNameInvalid() {
       boundaryNameEl.removeAttribute('aria-invalid');
       boundaryNameEl.removeAttribute('aria-describedby');
@@ -162,7 +192,7 @@
     function setBoundaryNameInvalid() {
       boundaryNameEl.setAttribute('aria-invalid', 'true');
       boundaryNameEl.setAttribute('aria-describedby', 'labelMsg');
-      boundaryNameEl.focus();
+      focusWithoutScroll(boundaryNameEl);
     }
 
     // Capture the current playback position as a named chapter start and save it.
@@ -171,6 +201,7 @@
       if (!name) {
         setLabelMsg('Enter a group name first.', true);
         setBoundaryNameInvalid();
+        hideMarkStatus();
         return;
       }
       const start = (pendingBoundaryStart !== null)
@@ -184,6 +215,7 @@
         boundaryNameEl.value = '';
         pendingBoundaryStart = null;
         clearBoundaryNameInvalid();
+        hideMarkStatus();
         setLabelMsg('Marked "' + name + '" at ' + formatTime(start) + '.', false);
         offerBoundaryUndo(added);
         await loadChapters();
@@ -196,9 +228,11 @@
     function startBoundaryMark() {
       clearBoundaryActions();
       pendingBoundaryStart = Math.round(video.currentTime || 0);
-      boundaryNameEl.focus();
-      setLabelMsg('Marking a boundary at ' + formatTime(pendingBoundaryStart) +
-        ' — type a name, then Enter to save or Esc to cancel.', false);
+      focusWithoutScroll(boundaryNameEl);
+      const prompt = 'Marking a boundary at ' + formatTime(pendingBoundaryStart) +
+        ' — type a name, then Enter to save or Esc to cancel.';
+      setLabelMsg(prompt, false);
+      showMarkStatus(prompt);
     }
 
     // Pre-save back-out: abandon an in-progress mark without writing anything.
@@ -207,6 +241,7 @@
       pendingBoundaryStart = null;
       clearBoundaryActions();
       clearBoundaryNameInvalid();
+      hideMarkStatus();
       setLabelMsg('Boundary marking cancelled.', false);
       return true;
     }
@@ -699,6 +734,8 @@
       }
     });
 
+    document.getElementById('shortcutsToggle').addEventListener('click', openShortcutsHelp);
+
     document.addEventListener('keydown', event => {
       if (event.defaultPrevented) return;
       // Alt+Up/Down nudges playback ±5 s and is allowed everywhere (even while the
@@ -717,7 +754,7 @@
       if (isTypingTarget(document.activeElement)) return;
       if (event.key === 'n') {
         event.preventDefault();
-        boundaryNameEl.focus();
+        focusWithoutScroll(boundaryNameEl);
       } else if (event.key === 'b') {
         event.preventDefault();
         startBoundaryMark();
