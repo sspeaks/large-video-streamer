@@ -58,7 +58,7 @@ func TestApplyMigrationsCreatesSchemaIdempotently(t *testing.T) {
 		}
 	}
 
-	wantTables := []string{"boundaries", "candidates", "schema_migrations", "shares"}
+	wantTables := []string{"boundaries", "candidates", "legacy_imports", "schema_migrations", "shares"}
 	if got := tableNames(t, ctx, db); strings.Join(got, ",") != strings.Join(wantTables, ",") {
 		t.Fatalf("tables = %v, want %v", got, wantTables)
 	}
@@ -73,7 +73,25 @@ func TestApplyMigrationsCreatesSchemaIdempotently(t *testing.T) {
 
 	assertColumns(t, ctx, db, "shares", "token_hash", "show", "chapter_name", "segments_json", "mode", "created_at")
 	assertColumns(t, ctx, db, "boundaries", "video", "sort_pos", "name", "start_seconds")
-	assertColumns(t, ctx, db, "candidates", "video", "sort_pos", "time_seconds", "duration_seconds", "status")
+	assertColumns(t, ctx, db, "candidates", "video", "sort_pos", "time_seconds", "duration_seconds", "status", "sources_json", "confidence", "suggested_name", "conflict")
+	assertColumns(t, ctx, db, "legacy_imports", "source_kind", "source_id", "imported_at")
+}
+
+func TestApplyMigrationsAddsLegacyImportMarkersToExistingDatabase(t *testing.T) {
+	ctx := context.Background()
+	db, err := Open(ctx, filepath.Join(testDir(t), "app.db"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer db.Close()
+
+	applyMigrationsThroughVersion(t, ctx, db, 5)
+
+	if err := ApplyMigrations(ctx, db); err != nil {
+		t.Fatalf("ApplyMigrations() error = %v", err)
+	}
+
+	assertColumns(t, ctx, db, "legacy_imports", "source_kind", "source_id", "imported_at")
 }
 
 func testDir(t *testing.T) string {
@@ -96,11 +114,12 @@ func tableNames(t *testing.T, ctx context.Context, db *sql.DB) []string {
 SELECT name
 FROM sqlite_master
 WHERE type = 'table'
-  AND name IN ('schema_migrations', 'shares', 'boundaries', 'candidates')
+  AND name IN ('schema_migrations', 'shares', 'boundaries', 'candidates', 'legacy_imports')
 ORDER BY name`)
 	if err != nil {
 		t.Fatalf("query sqlite_master error = %v", err)
 	}
+
 	defer rows.Close()
 
 	var names []string
@@ -115,6 +134,26 @@ ORDER BY name`)
 		t.Fatalf("table rows error = %v", err)
 	}
 	return names
+}
+
+func applyMigrationsThroughVersion(t *testing.T, ctx context.Context, db *sql.DB, version int) {
+	t.Helper()
+	if _, err := db.ExecContext(ctx, createSchemaMigrations); err != nil {
+		t.Fatalf("create schema_migrations error = %v", err)
+	}
+	for _, m := range migrations {
+		if m.version > version {
+			continue
+		}
+		for _, stmt := range m.statements {
+			if _, err := db.ExecContext(ctx, stmt); err != nil {
+				t.Fatalf("apply migration %d %s statement error = %v", m.version, m.name, err)
+			}
+		}
+		if _, err := db.ExecContext(ctx, `INSERT INTO schema_migrations (version, name) VALUES (?, ?)`, m.version, m.name); err != nil {
+			t.Fatalf("record migration %d %s error = %v", m.version, m.name, err)
+		}
+	}
 }
 
 func assertColumns(t *testing.T, ctx context.Context, db *sql.DB, table string, want ...string) {

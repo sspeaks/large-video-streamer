@@ -94,7 +94,14 @@ func TestImportLegacyStateIdempotentAndPreservesFields(t *testing.T) {
 			{Name: "finale", Start: 123.45},
 		},
 		Candidates: []labels.Candidate{
-			{Time: 11.5, Duration: 2.25, Status: "candidate"},
+			{
+				Time:          11.5,
+				Duration:      2.25,
+				Status:        "candidate",
+				Sources:       []string{"silence", "lineup"},
+				Confidence:    0.8,
+				SuggestedName: "legacy-quartet",
+			},
 			{Time: 44, Duration: 1.5, Status: "rejected"},
 		},
 	}
@@ -148,6 +155,208 @@ func TestImportLegacyStateIdempotentAndPreservesFields(t *testing.T) {
 	}
 }
 
+func TestImportLegacyStateDeletedLegacyShareDoesNotReappear(t *testing.T) {
+	ctx := context.Background()
+	stateDir := testDir(t)
+	db, err := Open(ctx, filepath.Join(stateDir, "app.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	legacyShare := &share.Share{
+		TokenHash:   legacyHash("s"),
+		Show:        "legacy-show",
+		ChapterName: "legacy-chapter",
+		Start:       10,
+		End:         20,
+		Segments:    []string{"seg.ts"},
+		Playlist:    "#EXTM3U\n#EXTINF:10,\nseg.ts\n",
+		Mode:        share.ModeSingle,
+		CreatedAt:   time.Date(2026, 7, 7, 1, 2, 3, 4, time.UTC),
+	}
+	writeJSONFile(t, filepath.Join(stateDir, "shares.json"), []*share.Share{legacyShare}, 0o600)
+
+	if err := ImportLegacyState(ctx, db, stateDir); err != nil {
+		t.Fatalf("ImportLegacyState first pass: %v", err)
+	}
+	assertShareCount(t, ctx, db, 1)
+
+	if _, err := db.ExecContext(ctx, `DELETE FROM shares WHERE token_hash = ?`, legacyShare.TokenHash); err != nil {
+		t.Fatalf("delete imported share: %v", err)
+	}
+	assertShareCount(t, ctx, db, 0)
+
+	if err := ImportLegacyState(ctx, db, stateDir); err != nil {
+		t.Fatalf("ImportLegacyState second pass: %v", err)
+	}
+	assertShareCount(t, ctx, db, 0)
+}
+
+func TestImportLegacyStateEmptySavedLabelsAreNotReimported(t *testing.T) {
+	ctx := context.Background()
+	stateDir := testDir(t)
+	db, err := Open(ctx, filepath.Join(stateDir, "app.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	legacyLabels := labels.VideoLabels{
+		Boundaries: []labels.Boundary{{Name: "legacy-boundary", Start: 12}},
+		Candidates: []labels.Candidate{{Time: 12, Duration: 1, Status: "candidate"}},
+	}
+	writeJSONFile(t, filepath.Join(stateDir, "labels", "legacy_video.labels.json"), legacyLabels, 0o644)
+
+	if err := ImportLegacyState(ctx, db, stateDir); err != nil {
+		t.Fatalf("ImportLegacyState first pass: %v", err)
+	}
+	labelStore := NewLabelStore(db)
+	imported, err := labelStore.Load("legacy_video")
+	if err != nil {
+		t.Fatalf("Load imported labels: %v", err)
+	}
+	if len(imported.Boundaries) != 1 || len(imported.Candidates) != 1 {
+		t.Fatalf("imported labels = %#v, want one boundary and one candidate", imported)
+	}
+
+	if err := labelStore.Save(labels.VideoLabels{Video: "legacy_video"}); err != nil {
+		t.Fatalf("Save empty labels: %v", err)
+	}
+	assertRowCount(t, ctx, db, "boundaries", "legacy_video", 0)
+	assertRowCount(t, ctx, db, "candidates", "legacy_video", 0)
+
+	if err := ImportLegacyState(ctx, db, stateDir); err != nil {
+		t.Fatalf("ImportLegacyState second pass: %v", err)
+	}
+	assertRowCount(t, ctx, db, "boundaries", "legacy_video", 0)
+	assertRowCount(t, ctx, db, "candidates", "legacy_video", 0)
+}
+
+func TestImportLegacyStateInitialImportWorksWithMarkers(t *testing.T) {
+	ctx := context.Background()
+	stateDir := testDir(t)
+	db, err := Open(ctx, filepath.Join(stateDir, "app.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	legacyShare := &share.Share{
+		TokenHash:   legacyHash("i"),
+		Show:        "initial-show",
+		ChapterName: "initial-chapter",
+		Start:       3,
+		End:         8,
+		Segments:    []string{"initial.ts"},
+		Playlist:    "#EXTM3U\n#EXTINF:5,\ninitial.ts\n",
+		Mode:        share.ModePublic,
+		CreatedAt:   time.Date(2026, 7, 7, 5, 4, 3, 2, time.UTC),
+	}
+	writeJSONFile(t, filepath.Join(stateDir, "shares.json"), []*share.Share{legacyShare}, 0o600)
+	legacyLabels := labels.VideoLabels{
+		Boundaries: []labels.Boundary{{Name: "initial-boundary", Start: 3}},
+		Candidates: []labels.Candidate{{Time: 4, Duration: 1, Status: "candidate"}},
+	}
+	writeJSONFile(t, filepath.Join(stateDir, "labels", "initial_video.labels.json"), legacyLabels, 0o644)
+
+	if err := ImportLegacyState(ctx, db, stateDir); err != nil {
+		t.Fatalf("ImportLegacyState: %v", err)
+	}
+
+	gotShare := loadShareByHash(t, ctx, db, legacyShare.TokenHash)
+	assertShareEqual(t, gotShare, legacyShare)
+	gotLabels, err := NewLabelStore(db).Load("initial_video")
+	if err != nil {
+		t.Fatalf("Load imported labels: %v", err)
+	}
+	wantLabels := legacyLabels
+	wantLabels.Video = "initial_video"
+	if !reflect.DeepEqual(gotLabels, wantLabels) {
+		t.Fatalf("imported labels = %#v, want %#v", gotLabels, wantLabels)
+	}
+}
+
+func TestImportLegacyStatePreMarkerDatabaseDoesNotReplayLegacySources(t *testing.T) {
+	ctx := context.Background()
+	stateDir := testDir(t)
+	db, err := Open(ctx, filepath.Join(stateDir, "app.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+	applyMigrationsThroughVersion(t, ctx, db, 5)
+
+	staleShare := &share.Share{
+		TokenHash:   legacyHash("p"),
+		Show:        "stale-show",
+		ChapterName: "stale-chapter",
+		Start:       1,
+		End:         2,
+		Segments:    []string{"stale.ts"},
+		Playlist:    "#EXTM3U\n#EXTINF:1,\nstale.ts\n",
+		Mode:        share.ModeSingle,
+		CreatedAt:   time.Date(2026, 7, 7, 9, 8, 7, 6, time.UTC),
+	}
+	writeJSONFile(t, filepath.Join(stateDir, "shares.json"), []*share.Share{staleShare}, 0o600)
+	writeJSONFile(t, filepath.Join(stateDir, "labels", "stale_video.labels.json"), labels.VideoLabels{
+		Boundaries: []labels.Boundary{{Name: "stale-boundary", Start: 1}},
+		Candidates: []labels.Candidate{{Time: 1, Duration: 1, Status: "candidate"}},
+	}, 0o644)
+
+	if err := ImportLegacyState(ctx, db, stateDir); err != nil {
+		t.Fatalf("ImportLegacyState: %v", err)
+	}
+
+	assertShareCount(t, ctx, db, 0)
+	assertRowCount(t, ctx, db, "boundaries", "stale_video", 0)
+	assertRowCount(t, ctx, db, "candidates", "stale_video", 0)
+	assertLegacyImportMarker(t, ctx, db, legacyImportKindShares, legacyImportSourceID(filepath.Join(stateDir, "shares.json")))
+	assertLegacyImportMarker(t, ctx, db, legacyImportKindLabels, legacyImportSourceID(filepath.Join(stateDir, "labels")))
+}
+
+func TestImportLegacyStateBackfillsAfterDirectMigrationOfPreMarkerDatabase(t *testing.T) {
+	ctx := context.Background()
+	stateDir := testDir(t)
+	db, err := Open(ctx, filepath.Join(stateDir, "app.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+	applyMigrationsThroughVersion(t, ctx, db, 5)
+
+	if err := ApplyMigrations(ctx, db); err != nil {
+		t.Fatalf("ApplyMigrations: %v", err)
+	}
+
+	staleShare := &share.Share{
+		TokenHash:   legacyHash("d"),
+		Show:        "direct-show",
+		ChapterName: "direct-chapter",
+		Start:       10,
+		End:         11,
+		Segments:    []string{"direct.ts"},
+		Playlist:    "#EXTM3U\n#EXTINF:1,\ndirect.ts\n",
+		Mode:        share.ModeSingle,
+		CreatedAt:   time.Date(2026, 7, 7, 10, 11, 12, 13, time.UTC),
+	}
+	writeJSONFile(t, filepath.Join(stateDir, "shares.json"), []*share.Share{staleShare}, 0o600)
+	writeJSONFile(t, filepath.Join(stateDir, "labels", "direct_video.labels.json"), labels.VideoLabels{
+		Boundaries: []labels.Boundary{{Name: "direct-boundary", Start: 10}},
+		Candidates: []labels.Candidate{{Time: 10, Duration: 1, Status: "candidate"}},
+	}, 0o644)
+
+	if err := ImportLegacyState(ctx, db, stateDir); err != nil {
+		t.Fatalf("ImportLegacyState: %v", err)
+	}
+
+	assertShareCount(t, ctx, db, 0)
+	assertRowCount(t, ctx, db, "boundaries", "direct_video", 0)
+	assertRowCount(t, ctx, db, "candidates", "direct_video", 0)
+	assertLegacyImportMarker(t, ctx, db, legacyImportKindShares, legacyImportSourceID(filepath.Join(stateDir, "shares.json")))
+	assertLegacyImportMarker(t, ctx, db, legacyImportKindLabels, legacyImportSourceID(filepath.Join(stateDir, "labels")))
+}
+
 func writeJSONFile(t *testing.T, path string, value any, perm os.FileMode) []byte {
 	t.Helper()
 	data, err := json.MarshalIndent(value, "", "  ")
@@ -194,6 +403,20 @@ func assertRowCount(t *testing.T, ctx context.Context, db *sql.DB, table, video 
 	}
 	if got != want {
 		t.Fatalf("%s count for %s = %d, want %d", table, video, got, want)
+	}
+}
+
+func assertLegacyImportMarker(t *testing.T, ctx context.Context, db *sql.DB, kind, sourceID string) {
+	t.Helper()
+	var got int
+	if err := db.QueryRowContext(ctx, `
+SELECT COUNT(*)
+FROM legacy_imports
+WHERE source_kind = ? AND source_id = ?`, kind, sourceID).Scan(&got); err != nil {
+		t.Fatalf("count legacy import marker %s %q: %v", kind, sourceID, err)
+	}
+	if got != 1 {
+		t.Fatalf("legacy import marker count for %s %q = %d, want 1", kind, sourceID, got)
 	}
 }
 

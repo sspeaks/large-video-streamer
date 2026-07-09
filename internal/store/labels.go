@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -77,9 +78,23 @@ VALUES (?, ?, ?, ?)`, labelDoc.Video, sortPos, boundary.Name, boundary.Start); e
 	}
 
 	for sortPos, candidate := range labelDoc.Candidates {
+		sourcesJSON, err := marshalCandidateSources(candidate.Sources)
+		if err != nil {
+			return fmt.Errorf("encode candidate %d sources for %q: %w", sortPos, labelDoc.Video, err)
+		}
 		if _, err := tx.ExecContext(ctx, `
-INSERT INTO candidates (video, sort_pos, time_seconds, duration_seconds, status)
-VALUES (?, ?, ?, ?, ?)`, labelDoc.Video, sortPos, candidate.Time, candidate.Duration, candidate.Status); err != nil {
+INSERT INTO candidates (video, sort_pos, time_seconds, duration_seconds, status, sources_json, confidence, suggested_name, conflict)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			labelDoc.Video,
+			sortPos,
+			candidate.Time,
+			candidate.Duration,
+			candidate.Status,
+			sourcesJSON,
+			candidate.Confidence,
+			candidate.SuggestedName,
+			boolInt(candidate.Conflict),
+		); err != nil {
 			return fmt.Errorf("insert candidate %d for %q: %w", sortPos, labelDoc.Video, err)
 		}
 	}
@@ -117,7 +132,7 @@ ORDER BY sort_pos`, video)
 
 func (s *SQLiteLabelStore) loadCandidates(ctx context.Context, video string) ([]labels.Candidate, error) {
 	rows, err := s.db.QueryContext(ctx, `
-SELECT time_seconds, duration_seconds, status
+SELECT time_seconds, duration_seconds, status, sources_json, confidence, suggested_name, conflict
 FROM candidates
 WHERE video = ?
 ORDER BY sort_pos`, video)
@@ -129,13 +144,58 @@ ORDER BY sort_pos`, video)
 	var candidates []labels.Candidate
 	for rows.Next() {
 		var candidate labels.Candidate
-		if err := rows.Scan(&candidate.Time, &candidate.Duration, &candidate.Status); err != nil {
+		var sourcesJSON string
+		var conflict int
+		if err := rows.Scan(
+			&candidate.Time,
+			&candidate.Duration,
+			&candidate.Status,
+			&sourcesJSON,
+			&candidate.Confidence,
+			&candidate.SuggestedName,
+			&conflict,
+		); err != nil {
 			return nil, fmt.Errorf("scan candidate for %q: %w", video, err)
 		}
+		sources, err := unmarshalCandidateSources(sourcesJSON)
+		if err != nil {
+			return nil, fmt.Errorf("decode candidate sources for %q: %w", video, err)
+		}
+		candidate.Sources = sources
+		candidate.Conflict = conflict != 0
 		candidates = append(candidates, candidate)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("load candidates for %q: %w", video, err)
 	}
 	return candidates, nil
+}
+
+func marshalCandidateSources(sources []string) (string, error) {
+	if len(sources) == 0 {
+		return "[]", nil
+	}
+	data, err := json.Marshal(sources)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
+func unmarshalCandidateSources(data string) ([]string, error) {
+	var sources []string
+	if err := json.Unmarshal([]byte(data), &sources); err != nil {
+		return nil, err
+	}
+	if len(sources) == 0 {
+		return nil, nil
+	}
+	return sources, nil
+}
+
+func boolInt(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
 }

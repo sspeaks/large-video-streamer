@@ -13,6 +13,10 @@ type migration struct {
 	statements []string
 }
 
+type migrationHook func(context.Context, *sql.Tx, migration) error
+
+const legacyImportMarkersMigrationVersion = 6
+
 const createSchemaMigrations = `
 CREATE TABLE IF NOT EXISTS schema_migrations (
 	version INTEGER PRIMARY KEY,
@@ -90,10 +94,37 @@ CREATE TABLE IF NOT EXISTS candidates (
 			`CREATE INDEX IF NOT EXISTS candidates_video_time_idx ON candidates(video, time_seconds)`,
 		},
 	},
+	{
+		version: 5,
+		name:    "candidate_metadata",
+		statements: []string{
+			`ALTER TABLE candidates ADD COLUMN sources_json TEXT NOT NULL DEFAULT '[]'`,
+			`ALTER TABLE candidates ADD COLUMN confidence REAL NOT NULL DEFAULT 0`,
+			`ALTER TABLE candidates ADD COLUMN suggested_name TEXT NOT NULL DEFAULT ''`,
+			`ALTER TABLE candidates ADD COLUMN conflict INTEGER NOT NULL DEFAULT 0`,
+		},
+	},
+	{
+		version: legacyImportMarkersMigrationVersion,
+		name:    "legacy_import_markers",
+		statements: []string{
+			`
+CREATE TABLE IF NOT EXISTS legacy_imports (
+	source_kind TEXT NOT NULL,
+	source_id TEXT NOT NULL,
+	imported_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+	PRIMARY KEY (source_kind, source_id)
+)`,
+		},
+	},
 }
 
 // ApplyMigrations applies all known schema migrations exactly once.
 func ApplyMigrations(ctx context.Context, db *sql.DB) error {
+	return applyMigrations(ctx, db, nil)
+}
+
+func applyMigrations(ctx context.Context, db *sql.DB, hook migrationHook) error {
 	if db == nil {
 		return errors.New("sqlite db is nil")
 	}
@@ -103,6 +134,11 @@ func ApplyMigrations(ctx context.Context, db *sql.DB) error {
 		return fmt.Errorf("begin sqlite migration: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+
+	preExistingMigrations, err := schemaMigrationCount(ctx, tx)
+	if err != nil {
+		return err
+	}
 
 	if _, err := tx.ExecContext(ctx, createSchemaMigrations); err != nil {
 		return fmt.Errorf("create schema_migrations: %w", err)
@@ -121,6 +157,15 @@ func ApplyMigrations(ctx context.Context, db *sql.DB) error {
 				return fmt.Errorf("apply migration %d %s: %w", m.version, m.name, err)
 			}
 		}
+		if hook != nil {
+			if err := hook(ctx, tx, m); err != nil {
+				return err
+			}
+		} else if m.version == legacyImportMarkersMigrationVersion && preExistingMigrations > 0 {
+			if err := recordLegacyImport(ctx, tx, legacyImportKindMigration, legacyImportSourcePreMarkerBackfillRequired); err != nil {
+				return err
+			}
+		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO schema_migrations (version, name) VALUES (?, ?)`, m.version, m.name); err != nil {
 			return fmt.Errorf("record migration %d %s: %w", m.version, m.name, err)
 		}
@@ -130,6 +175,26 @@ func ApplyMigrations(ctx context.Context, db *sql.DB) error {
 		return fmt.Errorf("commit sqlite migrations: %w", err)
 	}
 	return nil
+}
+
+func schemaMigrationCount(ctx context.Context, tx *sql.Tx) (int, error) {
+	var tableName string
+	err := tx.QueryRowContext(ctx, `
+SELECT name
+FROM sqlite_master
+WHERE type = 'table' AND name = 'schema_migrations'`).Scan(&tableName)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("check schema_migrations table: %w", err)
+	}
+
+	var count int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM schema_migrations`).Scan(&count); err != nil {
+		return 0, fmt.Errorf("count schema_migrations: %w", err)
+	}
+	return count, nil
 }
 
 func migrationApplied(ctx context.Context, tx *sql.Tx, m migration) (bool, error) {

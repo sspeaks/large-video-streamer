@@ -24,7 +24,7 @@
         };
         devScript = pkgs.writeShellApplication {
           name = "vid-streamer-dev";
-          runtimeInputs = [ vid-streamer pkgs.ffmpeg pkgs.mkvtoolnix ];
+          runtimeInputs = [ vid-streamer pkgs.ffmpeg pkgs.mkvtoolnix pkgs.tesseract ];
           text = ''
             set -euo pipefail
             VIDEO_DIR="''${1:-$PWD/videos}"
@@ -69,6 +69,7 @@
             pkgs.gotools
             pkgs.ffmpeg
             pkgs.mkvtoolnix
+            pkgs.tesseract
           ];
         };
 

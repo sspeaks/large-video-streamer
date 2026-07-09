@@ -37,6 +37,7 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
     .candidate-table-wrap thead th { position: sticky; top: 0; z-index: 1; background: var(--surface); }
     table { width: 100%; min-width: 44rem; border-collapse: collapse; }
     table.boundary-table { min-width: 42rem; }
+    table.candidate-table { min-width: 58rem; }
     input, textarea, select { padding: .65rem; }
     textarea { min-height: 9rem; font-family: var(--font-mono); }
     button { min-height: 44px; margin: 0; padding: .65rem .85rem; border: 1px solid transparent; border-radius: var(--radius-sm); background: var(--accent-solid); color: var(--accent-solid-text); font: inherit; font-weight: 700; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: .35rem; white-space: nowrap; }
@@ -51,10 +52,15 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
     .actions { margin: .75rem 0; }
     .row-actions { min-width: 18rem; }
     .candidate-table .row-actions { min-width: 15rem; }
-    .candidate-tools, .bulk-actions { margin: .75rem 0; }
-    .candidate-tools label, .bulk-actions label { display: inline-flex; gap: .5rem; align-items: center; color: var(--text-muted); }
+    .candidate-tools, .bulk-actions, .autodetect-options { margin: .75rem 0; }
+    .candidate-tools label, .bulk-actions label, .autodetect-options label { display: inline-flex; gap: .5rem; align-items: center; color: var(--text-muted); }
     .candidate-tools input[type="number"] { width: 7rem; }
     .bulk-actions input, .inline-name { width: 10rem; }
+    .autodetect-panel textarea { width: 100%; min-height: 6rem; }
+    .source-badges { display: flex; flex-wrap: wrap; gap: .25rem; }
+    .source-badge, .conflict-badge { display: inline-flex; align-items: center; min-height: 1.5rem; padding: .1rem .45rem; border-radius: 999px; font-size: .85em; font-weight: 700; }
+    .source-badge { background: var(--surface-input); color: var(--text); border: 1px solid var(--border); }
+    .conflict-badge { background: var(--danger); color: var(--danger-text); }
     .status-line { min-height: 1.8rem; }
     .status { min-height: 1.4rem; color: var(--accent); }
     .help { margin-top: 0; color: var(--text-muted); }
@@ -65,6 +71,7 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
     .field-label { display: block; margin-bottom: .4rem; font-weight: 700; }
     .grid { display: grid; gap: 1rem; grid-template-columns: minmax(0, 1fr); }
     .empty-state { padding: 1rem; color: var(--text-muted); text-align: center; }
+    tr.candidate-conflict > td { box-shadow: inset 3px 0 0 var(--danger); }
     tr.candidate-current > td { background: var(--surface-input); }
     tr.candidate-current { outline: 2px solid var(--accent); outline-offset: -2px; }
     video { width: 100%; max-height: 60vh; background: var(--bg-deep); border-radius: .5rem; }
@@ -105,6 +112,7 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
       <button id="export" class="secondary mutating-control">Export timestamps</button>
       <button id="import" class="secondary mutating-control">Import timestamps</button>
       <button id="detect" class="secondary mutating-control">Detect silences</button>
+      <button id="autodetect" class="secondary mutating-control">Auto-detect</button>
     </div>
     <details class="help" id="shortcuts-help">
       <summary>Keyboard shortcuts</summary>
@@ -138,6 +146,16 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
       <section>
         <h2>Candidates</h2>
         <p class="help">Review detected silences, then promote useful ones into named boundaries or reject noise.</p>
+        <div class="autodetect-panel" aria-label="Auto-detect setup">
+          <label class="field-label" for="autodetect-lineup">Lineup for Auto-detect</label>
+          <p class="help" id="autodetect-lineup-help">Enter one quartet name per non-empty line. Auto-detect will use the lineup to suggest candidate names.</p>
+          <textarea id="autodetect-lineup" name="autodetect-lineup" class="editable-control" autocomplete="off" data-lpignore="true" aria-describedby="autodetect-lineup-help" placeholder="Quartet A&#10;Quartet B"></textarea>
+          <div class="autodetect-options" aria-label="Auto-detect signal sources">
+            <label><input type="checkbox" id="autodetect-use-silence" name="autodetect-use-silence" class="mutating-control" data-lpignore="true" checked> Use silence</label>
+            <label><input type="checkbox" id="autodetect-use-color" name="autodetect-use-color" class="mutating-control" data-lpignore="true" checked> Use color</label>
+            <label><input type="checkbox" id="autodetect-use-ocr" name="autodetect-use-ocr" class="mutating-control" data-lpignore="true" checked> Use OCR</label>
+          </div>
+        </div>
         <div class="candidate-tools" aria-label="Candidate filters">
           <label for="candidate-sort">Sort
             <select id="candidate-sort" name="candidate-sort" autocomplete="off" data-lpignore="true">
@@ -156,11 +174,12 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
           </label>
           <button id="bulk-promote" class="secondary mutating-control" disabled>Promote selected</button>
           <button id="bulk-reject" class="danger mutating-control" disabled>Reject selected</button>
+          <button id="promote-high-confidence" class="secondary mutating-control" disabled>Promote high-confidence</button>
         </div>
         <p class="help" id="candidate-count"></p>
         <div class="table-wrap candidate-table-wrap">
           <table class="candidate-table">
-            <thead><tr><th><input type="checkbox" id="select-all-candidates" name="select-all-candidates" aria-label="Select all visible pending candidates" data-lpignore="true"></th><th>Time</th><th>Duration</th><th>Status</th><th>Actions</th></tr></thead>
+            <thead><tr><th><input type="checkbox" id="select-all-candidates" name="select-all-candidates" aria-label="Select all visible pending candidates" data-lpignore="true"></th><th>Time</th><th>Duration</th><th>Sources</th><th>Confidence</th><th>Status</th><th>Actions</th></tr></thead>
             <tbody id="candidates"></tbody>
           </table>
         </div>
@@ -180,12 +199,18 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
     let labels = { video: show, boundaries: [], candidates: [] };
     let dirty = false;
     let busy = false;
+    let busyOperation = '';
     let currentKey = null;
     const selectedCandidates = new Set();
     const statusEl = document.getElementById('status');
     const statusActions = document.getElementById('status-actions');
     const saveStateEl = document.getElementById('save-state');
     const detectButton = document.getElementById('detect');
+    const autoDetectButton = document.getElementById('autodetect');
+    const autodetectLineup = document.getElementById('autodetect-lineup');
+    const autodetectUseSilence = document.getElementById('autodetect-use-silence');
+    const autodetectUseColor = document.getElementById('autodetect-use-color');
+    const autodetectUseOCR = document.getElementById('autodetect-use-ocr');
     const sortControl = document.getElementById('candidate-sort');
     const hideHandledControl = document.getElementById('hide-handled');
     const minDurationControl = document.getElementById('min-duration');
@@ -193,6 +218,7 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
     const bulkName = document.getElementById('bulk-name');
     const bulkPromote = document.getElementById('bulk-promote');
     const bulkReject = document.getElementById('bulk-reject');
+    const highConfidencePromote = document.getElementById('promote-high-confidence');
     const candidateCount = document.getElementById('candidate-count');
     const displayName = (value) => {
       const words = String(value || '').replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim().split(' ').filter(Boolean);
@@ -276,9 +302,27 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
       labels.candidates = labels.candidates || [];
     };
     const candidateStatus = (candidate) => candidate.status || 'candidate';
+    const candidateSuggestedName = (candidate) => String((candidate && candidate.suggestedName) || '').trim();
+    const candidateDefaultName = (candidate, fallback) => candidateSuggestedName(candidate) || String(fallback || '').trim() || 'group-a';
     const isHandledCandidate = (candidate) => {
       const status = candidateStatus(candidate);
       return status === 'named' || status === 'rejected';
+    };
+    const candidateSources = (candidate) => Array.isArray(candidate.sources) ? candidate.sources.map(source => String(source || '').trim()).filter(Boolean) : [];
+    const renderSourceBadges = (candidate) => {
+      const sources = candidateSources(candidate);
+      if (sources.length === 0) return '<span class="help">—</span>';
+      return '<span class="source-badges">' + sources.map(source => '<span class="source-badge">' + escapeText(source) + '</span>').join('') + '</span>';
+    };
+    const formatConfidence = (value) => {
+      const confidence = Number(value);
+      if (!Number.isFinite(confidence) || confidence <= 0) return '—';
+      return Math.round(confidence * 100) + '%';
+    };
+    const renderCandidateStatus = (candidate) => {
+      const status = escapeText(candidateStatus(candidate));
+      if (!candidate.conflict) return status;
+      return status + ' <span class="conflict-badge">Conflict</span>';
     };
     const candidateKey = (candidate) => String(Number(candidate.time) || 0) + '|' + String(Number(candidate.duration) || 0);
     const candidateItems = () => {
@@ -307,19 +351,28 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
       candidateCount.textContent = counts.pending + ' pending · ' + counts.named + ' promoted · ' + counts.rejected + ' rejected';
     };
     const selectedVisiblePendingItems = () => candidateItems().filter((item) => selectedCandidates.has(item.key) && !isHandledCandidate(item.candidate));
+    const highConfidenceCandidateItems = () => {
+      normalizeLabels();
+      return labels.candidates.map((candidate, index) => ({ candidate: candidate, index: index, key: candidateKey(candidate) })).filter((item) => !isHandledCandidate(item.candidate) && Number(item.candidate.confidence) >= 0.85 && candidateSuggestedName(item.candidate));
+    };
     const updateBulkControls = () => {
       const selected = selectedVisiblePendingItems();
       bulkPromote.disabled = busy || selected.length === 0;
       bulkReject.disabled = busy || selected.length === 0;
+      const highConfidence = highConfidenceCandidateItems();
+      highConfidencePromote.disabled = busy || highConfidence.length === 0;
       const visiblePending = candidateItems().filter((item) => !isHandledCandidate(item.candidate));
       selectAllCandidates.disabled = busy || visiblePending.length === 0;
       selectAllCandidates.checked = visiblePending.length > 0 && visiblePending.every((item) => selectedCandidates.has(item.key));
       selectAllCandidates.indeterminate = selected.length > 0 && !selectAllCandidates.checked;
     };
-    const setBusy = (value) => {
+    const setBusy = (value, operation) => {
       busy = Boolean(value);
+      if (busy && operation) busyOperation = operation;
+      if (!busy) busyOperation = '';
       document.querySelectorAll('.mutating-control, .editable-control').forEach((control) => { control.disabled = busy; });
-      detectButton.textContent = busy ? 'Detecting…' : 'Detect silences';
+      detectButton.textContent = busy && busyOperation === 'detect' ? 'Detecting…' : 'Detect silences';
+      autoDetectButton.textContent = busy && busyOperation === 'autodetect' ? 'Auto-detecting…' : 'Auto-detect';
       updateBulkControls();
     };
     const boundaryNameForBulk = (base, index, total) => total === 1 ? base : base + '-' + String(index + 1);
@@ -390,7 +443,7 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
       if (items.length === 0) { setStatus('No pending candidates to promote.'); return; }
       const item = currentCandidateItem() || items[0];
       const handledIndex = items.findIndex((i) => i.key === item.key);
-      const defaultName = (bulkName.value || '').trim() || 'group-a';
+      const defaultName = candidateDefaultName(item.candidate, bulkName.value);
       const name = window.prompt('Boundary name for candidate at ' + secondsToClock(item.candidate.time), defaultName);
       if (name === null) { setStatus('Promote cancelled.'); return; }
       if (!promoteCandidate(item.candidate, name)) return;
@@ -473,7 +526,7 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
       if (visibleCandidates.length === 0) {
         const row = document.createElement('tr');
         const message = (labels.candidates || []).length === 0 ? 'No candidates yet. Use Detect silences to find possible boundary points.' : 'No candidates match the current filters. Adjust filters or run Detect silences again.';
-        row.innerHTML = '<td colspan="5" class="empty-state">' + escapeText(message) + ' <button type="button" class="secondary empty-detect mutating-control">Detect silences</button></td>';
+        row.innerHTML = '<td colspan="7" class="empty-state">' + escapeText(message) + ' <button type="button" class="secondary empty-detect mutating-control">Detect silences</button></td>';
         row.querySelector('.empty-detect').addEventListener('click', runDetect);
         candidates.appendChild(row);
       } else {
@@ -481,11 +534,13 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
           const candidate = item.candidate;
           const row = document.createElement('tr');
           if (item.key === currentKey) { row.classList.add('candidate-current'); row.setAttribute('aria-current', 'true'); }
+          if (candidate.conflict) { row.classList.add('candidate-conflict'); }
           const checked = selectedCandidates.has(item.key) ? ' checked' : '';
           const handled = isHandledCandidate(candidate);
           const disabled = handled ? ' disabled' : '';
-          const pendingActions = handled ? '<span class="help">Handled</span>' : '<label><span class="sr-only">Boundary name for candidate at ' + secondsToClock(candidate.time) + '</span><input type="text" class="inline-name editable-control" name="candidate-boundary-name-' + item.index + '" autocomplete="off" data-lpignore="true" value="group-a" aria-label="Boundary name for candidate at ' + secondsToClock(candidate.time) + '"></label><button class="promote mutating-control">Promote</button><button class="danger reject mutating-control">Reject</button>';
-          row.innerHTML = '<td><input type="checkbox" class="candidate-select" name="candidate-select-' + item.index + '" aria-label="Select candidate at ' + secondsToClock(candidate.time) + '" data-lpignore="true"' + checked + disabled + '></td><td>' + secondsToClock(candidate.time) + '</td><td>' + Number(candidate.duration || 0).toFixed(2) + 's</td><td>' + escapeText(candidateStatus(candidate)) + '</td><td><div class="row-actions"><button class="secondary preview">Preview</button>' + pendingActions + '</div></td>';
+          const inlineDefaultName = candidateSuggestedName(candidate) || 'group-a';
+          const pendingActions = handled ? '<span class="help">Handled</span>' : '<label><span class="sr-only">Boundary name for candidate at ' + secondsToClock(candidate.time) + '</span><input type="text" class="inline-name editable-control" name="candidate-boundary-name-' + item.index + '" autocomplete="off" data-lpignore="true" value="' + escapeAttr(inlineDefaultName) + '" aria-label="Boundary name for candidate at ' + secondsToClock(candidate.time) + '"></label><button class="promote mutating-control">Promote</button><button class="danger reject mutating-control">Reject</button>';
+          row.innerHTML = '<td><input type="checkbox" class="candidate-select" name="candidate-select-' + item.index + '" aria-label="Select candidate at ' + secondsToClock(candidate.time) + '" data-lpignore="true"' + checked + disabled + '></td><td>' + secondsToClock(candidate.time) + '</td><td>' + Number(candidate.duration || 0).toFixed(2) + 's</td><td>' + renderSourceBadges(candidate) + '</td><td>' + escapeText(formatConfidence(candidate.confidence)) + '</td><td>' + renderCandidateStatus(candidate) + '</td><td><div class="row-actions"><button class="secondary preview">Preview</button>' + pendingActions + '</div></td>';
           const checkbox = row.querySelector('.candidate-select');
           checkbox.addEventListener('change', () => {
             if (checkbox.checked) selectedCandidates.add(item.key);
@@ -515,7 +570,7 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
     };
     const runDetect = async () => {
       if (busy) return;
-      setBusy(true);
+      setBusy(true, 'detect');
       setStatus('Detecting silences (analyzing audio)…');
       try {
         const res = await fetch(api + '/detect', { method: 'POST' });
@@ -529,6 +584,42 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
         setStatus('Detected ' + n + ' pending candidate boundary(ies) — promote or reject each, then Save.');
       } catch (err) {
         setStatus('Detect failed: ' + err.message);
+      } finally {
+        setBusy(false);
+      }
+    };
+    const parseAutodetectLineup = () => autodetectLineup.value.split(/\r?\n/).map((name) => name.trim()).filter(Boolean).map((name) => ({ name: name }));
+    const runAutodetect = async () => {
+      if (busy) return;
+      const lineup = parseAutodetectLineup();
+      if (lineup.length === 0) {
+        setStatus('Enter at least one quartet name before auto-detecting.');
+        autodetectLineup.focus();
+        return;
+      }
+      setBusy(true, 'autodetect');
+      setStatus('Auto-detecting candidates (silence, color, and OCR)…');
+      try {
+        const res = await fetch(api + '/autodetect', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            lineup: lineup,
+            useSilence: autodetectUseSilence.checked,
+            useColor: autodetectUseColor.checked,
+            useOCR: autodetectUseOCR.checked,
+          }),
+        });
+        if (!res.ok) throw new Error(await res.text());
+        labels = await res.json();
+        normalizeLabels();
+        selectedCandidates.clear();
+        render();
+        const n = labels.candidates.filter(c => candidateStatus(c) === 'candidate').length;
+        setDirty(true);
+        setStatus('Auto-detected ' + n + ' pending candidate boundary(ies) — review, promote or reject, then Save.');
+      } catch (err) {
+        setStatus('Auto-detect failed: ' + err.message);
       } finally {
         setBusy(false);
       }
@@ -576,6 +667,7 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
       }
     });
     detectButton.addEventListener('click', runDetect);
+    autoDetectButton.addEventListener('click', runAutodetect);
     sortControl.addEventListener('change', render);
     hideHandledControl.addEventListener('change', render);
     minDurationControl.addEventListener('input', render);
@@ -597,6 +689,16 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
       selected.forEach((item, index) => promoteCandidate(item.candidate, boundaryNameForBulk(baseName, index, selected.length)));
       render();
       setStatus('Promoted ' + selected.length + ' selected candidate(s). Save to persist.');
+    });
+    highConfidencePromote.addEventListener('click', () => {
+      const highConfidence = highConfidenceCandidateItems();
+      if (highConfidence.length === 0) {
+        setStatus('No high-confidence suggestions to promote.');
+        return;
+      }
+      highConfidence.forEach((item) => promoteCandidate(item.candidate, candidateSuggestedName(item.candidate)));
+      render();
+      setStatus('Promoted ' + highConfidence.length + ' high-confidence candidate(s). Save to persist.');
     });
     bulkReject.addEventListener('click', () => {
       const selected = selectedVisiblePendingItems();
@@ -669,6 +771,7 @@ func (srv *Server) RegisterRoutes(mux *http.ServeMux, a *auth.Authenticator) {
 	mux.Handle("POST /labels/api/{show}/mkv/import", a.RequireMedia(http.HandlerFunc(srv.handleMKVImport)))
 	mux.Handle("POST /labels/api/{show}/mkv/embed", a.RequireMedia(http.HandlerFunc(srv.handleMKVEmbed)))
 	mux.Handle("POST /labels/api/{show}/detect", a.RequireMedia(http.HandlerFunc(srv.handleDetect)))
+	mux.Handle("POST /labels/api/{show}/autodetect", a.RequireMedia(http.HandlerFunc(srv.handleAutodetect)))
 }
 
 func (srv *Server) handleLabelsPage(w http.ResponseWriter, r *http.Request) {
@@ -820,7 +923,37 @@ func (srv *Server) handleDetect(w http.ResponseWriter, r *http.Request) {
 	for _, sil := range silences {
 		detected = append(detected, Candidate{Time: sil.Time, Duration: sil.Duration, Status: "candidate"})
 	}
-	labels.Candidates = mergeCandidates(labels.Candidates, detected)
+	labels.Candidates = mergeCandidatesWithBoundaries(labels.Candidates, detected, labels.Boundaries)
+	labels.Video = show
+	if err := srv.store.Save(labels); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, labels)
+}
+
+func (srv *Server) handleAutodetect(w http.ResponseWriter, r *http.Request) {
+	show, ok := validShowFromRequest(w, r)
+	if !ok {
+		return
+	}
+	defer r.Body.Close()
+	req, err := decodeAutodetectRequest(r.Body)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	labels, err := srv.store.Load(show)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	detected, err := srv.buildAutodetectCandidates(filepath.Join(srv.cfg.VideoDir, show+".mkv"), req)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	labels.Candidates = mergeCandidatesWithBoundaries(labels.Candidates, detected, labels.Boundaries)
 	labels.Video = show
 	if err := srv.store.Save(labels); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -833,6 +966,10 @@ func (srv *Server) handleDetect(w http.ResponseWriter, r *http.Request) {
 // (status "named" or "rejected") and adds freshly detected candidates whose
 // time is not within one second of a kept one. The result is sorted by time.
 func mergeCandidates(existing, detected []Candidate) []Candidate {
+	return mergeCandidatesWithBoundaries(existing, detected, nil)
+}
+
+func mergeCandidatesWithBoundaries(existing, detected []Candidate, boundaries []Boundary) []Candidate {
 	var kept []Candidate
 	for _, c := range existing {
 		if c.Status == "named" || c.Status == "rejected" {
@@ -841,19 +978,81 @@ func mergeCandidates(existing, detected []Candidate) []Candidate {
 	}
 	result := append([]Candidate(nil), kept...)
 	for _, d := range detected {
-		duplicate := false
-		for _, k := range kept {
-			if math.Abs(k.Time-d.Time) < 1.0 {
-				duplicate = true
-				break
-			}
+		if nearAnyCandidate(d.Time, kept) || nearAnyBoundary(d.Time, boundaries) {
+			continue
 		}
-		if !duplicate {
-			result = append(result, d)
+		if mergeIntoNearbyDetected(result, d, len(kept)) {
+			continue
 		}
+		result = append(result, d)
 	}
 	sort.SliceStable(result, func(i, j int) bool { return result[i].Time < result[j].Time })
 	return result
+}
+
+func nearAnyCandidate(t float64, candidates []Candidate) bool {
+	for _, c := range candidates {
+		if math.Abs(c.Time-t) < 1.0 {
+			return true
+		}
+	}
+	return false
+}
+
+func nearAnyBoundary(t float64, boundaries []Boundary) bool {
+	for _, b := range boundaries {
+		if math.Abs(b.Start-t) < 1.0 {
+			return true
+		}
+	}
+	return false
+}
+
+func mergeIntoNearbyDetected(result []Candidate, detected Candidate, start int) bool {
+	if !hasCandidateMetadata(detected) {
+		return false
+	}
+	for i := start; i < len(result); i++ {
+		if math.Abs(result[i].Time-detected.Time) >= 1.0 || !hasCandidateMetadata(result[i]) {
+			continue
+		}
+		result[i] = mergeCandidateMetadata(result[i], detected)
+		return true
+	}
+	return false
+}
+
+func hasCandidateMetadata(c Candidate) bool {
+	return len(c.Sources) > 0 || c.Confidence != 0 || c.SuggestedName != "" || c.Conflict
+}
+
+func mergeCandidateMetadata(a, b Candidate) Candidate {
+	merged := a
+	merged.Sources = unionSources(a.Sources, b.Sources)
+	if b.Confidence > merged.Confidence {
+		merged.Confidence = b.Confidence
+	}
+	if merged.SuggestedName == "" {
+		merged.SuggestedName = b.SuggestedName
+	}
+	merged.Conflict = merged.Conflict || b.Conflict
+	return merged
+}
+
+func unionSources(a, b []string) []string {
+	seen := make(map[string]struct{}, len(a)+len(b))
+	out := make([]string, 0, len(a)+len(b))
+	for _, source := range append(append([]string(nil), a...), b...) {
+		if source == "" {
+			continue
+		}
+		if _, ok := seen[source]; ok {
+			continue
+		}
+		seen[source] = struct{}{}
+		out = append(out, source)
+	}
+	return out
 }
 
 func validShowFromRequest(w http.ResponseWriter, r *http.Request) (string, bool) {

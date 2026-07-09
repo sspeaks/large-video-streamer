@@ -2,6 +2,7 @@ package labels
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/sspeaks/large-video-streamer/internal/auth"
 	"github.com/sspeaks/large-video-streamer/internal/config"
+	"github.com/sspeaks/large-video-streamer/internal/detect"
 )
 
 func TestRoutesSaveWritesSidecarAndChaptersVTT(t *testing.T) {
@@ -72,6 +74,117 @@ func TestRoutesRejectUnsafeShowNames(t *testing.T) {
 		if res.Code != http.StatusBadRequest {
 			t.Fatalf("GET %s status = %d, want %d; body %q", path, res.Code, http.StatusBadRequest, res.Body.String())
 		}
+	}
+}
+
+func TestRoutesAutodetectSavesCandidatesOnlyAndReturnsLabels(t *testing.T) {
+	videoDir := t.TempDir()
+	hlsDir := t.TempDir()
+	store := New(config.Config{VideoDir: videoDir, HLSDir: hlsDir, StateDir: t.TempDir()})
+	if err := store.Save(VideoLabels{Video: "sample_video", Boundaries: []Boundary{{Name: "existing", Start: 42}}}); err != nil {
+		t.Fatalf("Save fixture: %v", err)
+	}
+	signals := &fakeAutodetectSignals{
+		silences: []detect.Silence{{Time: 10, Duration: 2.5}, {Time: 20, Duration: 2}},
+	}
+	mux := authenticatedLabelServerMux(t, NewServer(store.cfg, store), signals)
+
+	res := serveLabelRequest(t, mux, http.MethodPost, "/labels/api/sample_video/autodetect", `{"lineup":[{"name":"quartet-a"}]}`)
+	if res.Code != http.StatusOK {
+		t.Fatalf("POST autodetect status = %d, want %d; body %q", res.Code, http.StatusOK, res.Body.String())
+	}
+
+	var labels VideoLabels
+	if err := json.Unmarshal(res.Body.Bytes(), &labels); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if labels.Video != "sample_video" || len(labels.Boundaries) != 1 || labels.Boundaries[0].Name != "existing" {
+		t.Fatalf("labels = %#v, want existing labels preserved", labels)
+	}
+	if len(labels.Candidates) != 2 {
+		t.Fatalf("len(Candidates) = %d, want 2: %#v", len(labels.Candidates), labels.Candidates)
+	}
+	if labels.Candidates[0].SuggestedName != "quartet-a" || labels.Candidates[1].SuggestedName != "quartet-a-song-2" {
+		t.Fatalf("SuggestedName values = %#v, want lineup suggestions", labels.Candidates)
+	}
+	if got, want := signals.silencePath, filepath.Join(videoDir, "sample_video.mkv"); got != want {
+		t.Fatalf("silence path = %q, want %q", got, want)
+	}
+	if _, err := os.Stat(filepath.Join(hlsDir, "sample_video", "chapters.vtt")); !os.IsNotExist(err) {
+		t.Fatalf("chapters.vtt exists after autodetect or stat failed: %v", err)
+	}
+	saved, err := store.Load("sample_video")
+	if err != nil {
+		t.Fatalf("Load saved labels: %v", err)
+	}
+	if len(saved.Candidates) != 2 || saved.Candidates[0].SuggestedName != "quartet-a" {
+		t.Fatalf("saved candidates = %#v, want autodetect candidates persisted", saved.Candidates)
+	}
+}
+
+func TestRoutesAutodetectDoesNotRewriteExistingChaptersVTT(t *testing.T) {
+	videoDir := t.TempDir()
+	hlsDir := t.TempDir()
+	store := New(config.Config{VideoDir: videoDir, HLSDir: hlsDir, StateDir: t.TempDir()})
+	if err := store.Save(VideoLabels{Video: "sample_video", Boundaries: []Boundary{{Name: "existing", Start: 42}}}); err != nil {
+		t.Fatalf("Save fixture: %v", err)
+	}
+	chaptersDir := filepath.Join(hlsDir, "sample_video")
+	if err := os.MkdirAll(chaptersDir, 0o755); err != nil {
+		t.Fatalf("create chapters dir: %v", err)
+	}
+	chaptersPath := filepath.Join(chaptersDir, "chapters.vtt")
+	const sentinel = "WEBVTT\n\nsentinel\n"
+	if err := os.WriteFile(chaptersPath, []byte(sentinel), 0o644); err != nil {
+		t.Fatalf("write sentinel chapters.vtt: %v", err)
+	}
+	signals := &fakeAutodetectSignals{
+		silences: []detect.Silence{{Time: 10, Duration: 2.5}},
+	}
+	mux := authenticatedLabelServerMux(t, NewServer(store.cfg, store), signals)
+
+	res := serveLabelRequest(t, mux, http.MethodPost, "/labels/api/sample_video/autodetect", `{"lineup":[{"name":"quartet-a"}]}`)
+	if res.Code != http.StatusOK {
+		t.Fatalf("POST autodetect status = %d, want %d; body %q", res.Code, http.StatusOK, res.Body.String())
+	}
+
+	chapters, err := os.ReadFile(chaptersPath)
+	if err != nil {
+		t.Fatalf("read chapters.vtt: %v", err)
+	}
+	if string(chapters) != sentinel {
+		t.Fatalf("chapters.vtt = %q, want existing sentinel unchanged because autodetect only saves candidates", chapters)
+	}
+}
+
+func TestRoutesAutodetectRejectsUnsafeShowBeforeSignals(t *testing.T) {
+	store := New(config.Config{VideoDir: t.TempDir(), HLSDir: t.TempDir(), StateDir: t.TempDir()})
+	signals := &fakeAutodetectSignals{}
+	mux := authenticatedLabelServerMux(t, NewServer(store.cfg, store), signals)
+
+	res := serveLabelRequest(t, mux, http.MethodPost, "/labels/api/sample..video/autodetect", `{"lineup":[{"name":"quartet-a"}]}`)
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("POST autodetect status = %d, want %d; body %q", res.Code, http.StatusBadRequest, res.Body.String())
+	}
+	if signals.silenceCalls != 0 {
+		t.Fatalf("silenceCalls = %d, want 0 for rejected show", signals.silenceCalls)
+	}
+}
+
+func TestRoutesAutodetectSurfacesRequestedOCRErrors(t *testing.T) {
+	store := New(config.Config{VideoDir: t.TempDir(), HLSDir: t.TempDir(), StateDir: t.TempDir()})
+	signals := &fakeAutodetectSignals{
+		silences: []detect.Silence{{Time: 10, Duration: 2}},
+		ocrErr:   errors.New("tesseract not found in PATH"),
+	}
+	mux := authenticatedLabelServerMux(t, NewServer(store.cfg, store), signals)
+
+	res := serveLabelRequest(t, mux, http.MethodPost, "/labels/api/sample_video/autodetect", `{"lineup":[{"name":"quartet-a"}],"useOCR":true}`)
+	if res.Code != http.StatusInternalServerError {
+		t.Fatalf("POST autodetect status = %d, want %d; body %q", res.Code, http.StatusInternalServerError, res.Body.String())
+	}
+	if !strings.Contains(res.Body.String(), "tesseract not found") {
+		t.Fatalf("body = %q, want OCR error", res.Body.String())
 	}
 }
 
@@ -171,6 +284,64 @@ func authenticatedLabelMux(t *testing.T, store *Store) *http.ServeMux {
 	authn.RegisterRoutes(mux)
 	store.RegisterRoutes(mux, authn)
 	return mux
+}
+
+func authenticatedLabelServerMux(t *testing.T, srv *Server, signals *fakeAutodetectSignals) *http.ServeMux {
+	t.Helper()
+	srv.autodetectSignals = signals
+	authn := auth.New(config.Config{LoginUser: "group-a", LoginPass: "group-b", CookieSecret: []byte("01234567890123456789012345678901")})
+	mux := http.NewServeMux()
+	authn.RegisterRoutes(mux)
+	srv.RegisterRoutes(mux, authn)
+	return mux
+}
+
+type fakeAutodetectSignals struct {
+	silences     []detect.Silence
+	silenceErr   error
+	silencePath  string
+	silenceCalls int
+	scenes       []detect.SceneChange
+	sceneErr     error
+	colorSamples []detect.ColorSample
+	colorErr     error
+	ocrResults   map[float64]detect.OCRResult
+	ocrErr       error
+}
+
+func (f *fakeAutodetectSignals) DetectSilence(path string, noiseDB float64, minDur float64) ([]detect.Silence, error) {
+	f.silenceCalls++
+	f.silencePath = path
+	if f.silenceErr != nil {
+		return nil, f.silenceErr
+	}
+	return f.silences, nil
+}
+
+func (f *fakeAutodetectSignals) DetectSceneChanges(path string, threshold float64) ([]detect.SceneChange, error) {
+	if f.sceneErr != nil {
+		return nil, f.sceneErr
+	}
+	return f.scenes, nil
+}
+
+func (f *fakeAutodetectSignals) SampleFrameColors(path string, sampleRate float64, crop string) ([]detect.ColorSample, error) {
+	if f.colorErr != nil {
+		return nil, f.colorErr
+	}
+	return f.colorSamples, nil
+}
+
+func (f *fakeAutodetectSignals) OCRLowerThird(path string, timestamp float64, options detect.OCROptions) (detect.OCRResult, error) {
+	if f.ocrErr != nil {
+		return detect.OCRResult{}, f.ocrErr
+	}
+	if f.ocrResults != nil {
+		if result, ok := f.ocrResults[timestamp]; ok {
+			return result, nil
+		}
+	}
+	return detect.OCRResult{}, nil
 }
 
 func serveLabelRequest(t *testing.T, mux *http.ServeMux, method, target, body string) *httptest.ResponseRecorder {

@@ -1,6 +1,7 @@
 package labels
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
@@ -62,7 +63,14 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 			{Name: "group-a", Start: 600},
 			{Name: "group-b", Start: 1200},
 		},
-		Candidates: []Candidate{{Time: 12.5, Duration: 1.25, Status: "candidate"}},
+		Candidates: []Candidate{{
+			Time:          12.5,
+			Duration:      1.25,
+			Status:        "candidate",
+			Sources:       []string{"silence", "lineup"},
+			Confidence:    0.8,
+			SuggestedName: "group-a",
+		}},
 	}
 	if err := store.Save(want); err != nil {
 		t.Fatalf("Save returned error: %v", err)
@@ -78,7 +86,7 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	if len(got.Boundaries) != len(want.Boundaries) || got.Boundaries[0] != want.Boundaries[0] || got.Boundaries[1] != want.Boundaries[1] {
 		t.Fatalf("Boundaries = %#v, want %#v", got.Boundaries, want.Boundaries)
 	}
-	if len(got.Candidates) != 1 || got.Candidates[0] != want.Candidates[0] {
+	if len(got.Candidates) != 1 || !reflect.DeepEqual(got.Candidates[0], want.Candidates[0]) {
 		t.Fatalf("Candidates = %#v, want %#v", got.Candidates, want.Candidates)
 	}
 }

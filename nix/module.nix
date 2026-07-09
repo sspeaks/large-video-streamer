@@ -158,7 +158,7 @@ in
       description = "vid-streamer authenticated HLS video server";
       wantedBy = [ "multi-user.target" ];
       after = [ "network.target" ];
-      path = [ pkgs.ffmpeg pkgs.mkvtoolnix ];
+      path = [ pkgs.ffmpeg pkgs.mkvtoolnix pkgs.tesseract ];
       environment = {
         VIDEO_DIR = toString cfg.videoDir;
         HLS_DIR = toString cfg.hlsDir;

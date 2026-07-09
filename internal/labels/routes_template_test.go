@@ -115,3 +115,76 @@ func TestLabelsPageMarksEditorInputsForPasswordManagers(t *testing.T) {
 		}
 	}
 }
+
+func TestLabelsPageIncludesAutodetectControlsAndRequest(t *testing.T) {
+	var buf bytes.Buffer
+	if err := labelsPageTemplate.Execute(&buf, struct{ Show string }{Show: "quartet_finals"}); err != nil {
+		t.Fatalf("execute labels page template: %v", err)
+	}
+	out := buf.String()
+
+	wants := []string{
+		`id="autodetect"`,
+		`id="autodetect-lineup" name="autodetect-lineup"`,
+		`id="autodetect-use-silence" name="autodetect-use-silence"`,
+		`id="autodetect-use-color" name="autodetect-use-color"`,
+		`id="autodetect-use-ocr" name="autodetect-use-ocr"`,
+		"const runAutodetect = async () =>",
+		"api + '/autodetect'",
+		"useSilence: autodetectUseSilence.checked",
+		"useColor: autodetectUseColor.checked",
+		"useOCR: autodetectUseOCR.checked",
+		"Auto-detect failed:",
+	}
+	for _, want := range wants {
+		if !strings.Contains(out, want) {
+			t.Fatalf("labels page should contain %q to wire up autodetect controls", want)
+		}
+	}
+}
+
+func TestLabelsPageRendersAutodetectCandidateMetadata(t *testing.T) {
+	var buf bytes.Buffer
+	if err := labelsPageTemplate.Execute(&buf, struct{ Show string }{Show: "quartet_finals"}); err != nil {
+		t.Fatalf("execute labels page template: %v", err)
+	}
+	out := buf.String()
+
+	wants := []string{
+		"<th>Sources</th>",
+		"<th>Confidence</th>",
+		"source-badge",
+		"formatConfidence(candidate.confidence)",
+		"candidate.conflict",
+		"candidate-conflict",
+		"candidateSuggestedName(candidate) || 'group-a'",
+		"candidateDefaultName(item.candidate, bulkName.value)",
+	}
+	for _, want := range wants {
+		if !strings.Contains(out, want) {
+			t.Fatalf("labels page should contain %q to show autodetect candidate metadata", want)
+		}
+	}
+}
+
+func TestLabelsPageIncludesHighConfidenceBulkApply(t *testing.T) {
+	var buf bytes.Buffer
+	if err := labelsPageTemplate.Execute(&buf, struct{ Show string }{Show: "quartet_finals"}); err != nil {
+		t.Fatalf("execute labels page template: %v", err)
+	}
+	out := buf.String()
+
+	wants := []string{
+		`id="promote-high-confidence"`,
+		"const highConfidenceCandidateItems = () =>",
+		"Number(item.candidate.confidence) >= 0.85",
+		"candidateSuggestedName(item.candidate)",
+		"promoteCandidate(item.candidate, candidateSuggestedName(item.candidate))",
+		"Save to persist.",
+	}
+	for _, want := range wants {
+		if !strings.Contains(out, want) {
+			t.Fatalf("labels page should contain %q to promote high-confidence suggestions without saving", want)
+		}
+	}
+}

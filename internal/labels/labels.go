@@ -14,9 +14,13 @@ type Boundary struct {
 
 // Candidate is a silence-detected possible chapter boundary.
 type Candidate struct {
-	Time     float64 `json:"time"`
-	Duration float64 `json:"duration"`
-	Status   string  `json:"status"`
+	Time          float64  `json:"time"`
+	Duration      float64  `json:"duration"`
+	Status        string   `json:"status"`
+	Sources       []string `json:"sources,omitempty"`
+	Confidence    float64  `json:"confidence,omitempty"`
+	SuggestedName string   `json:"suggestedName,omitempty"`
+	Conflict      bool     `json:"conflict,omitempty"`
 }
 
 // VideoLabels is the JSON sidecar model stored as <video>.labels.json.
@@ -41,8 +45,9 @@ var _ LabelStore = (*Store)(nil)
 
 // Server owns the label routes while delegating persistence to a LabelStore.
 type Server struct {
-	cfg   config.Config
-	store LabelStore
+	cfg               config.Config
+	store             LabelStore
+	autodetectSignals autodetectSignals
 }
 
 // New returns the flat-file label store rooted in the configured state directory.
@@ -56,7 +61,7 @@ func NewServer(cfg config.Config, store LabelStore) *Server {
 	if store == nil {
 		store = New(cfg)
 	}
-	return &Server{cfg: cfg, store: store}
+	return &Server{cfg: cfg, store: store, autodetectSignals: detectAutodetectSignals{}}
 }
 
 // Load reads labels for video.

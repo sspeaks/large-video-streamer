@@ -1,0 +1,6 @@
+ffconcat version 1.0
+file red.ppm
+duration 1
+file blue.ppm
+duration 1
+file blue.ppm

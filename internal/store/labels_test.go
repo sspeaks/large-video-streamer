@@ -37,7 +37,15 @@ func TestLabelStoreSaveLoadRoundTripPreservesOrderAndCandidates(t *testing.T) {
 			{Name: "second by time", Start: 20},
 		},
 		Candidates: []labels.Candidate{
-			{Time: 12.5, Duration: 1.25, Status: "candidate"},
+			{
+				Time:          12.5,
+				Duration:      1.25,
+				Status:        "candidate",
+				Sources:       []string{"silence", "lineup", "ocr"},
+				Confidence:    0.91,
+				SuggestedName: "Quartet A",
+				Conflict:      true,
+			},
 			{Time: 90, Duration: 0.5, Status: "rejected"},
 			{Time: 45.75, Duration: 2, Status: "named"},
 			{Time: 60, Duration: 3.5, Status: ""},
