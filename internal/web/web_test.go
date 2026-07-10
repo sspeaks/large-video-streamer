@@ -98,6 +98,54 @@ func TestPlayerIncludesBoundaryHotkey(t *testing.T) {
 	}
 }
 
+func TestPlayerBoundaryFocusKeepsVideoInFrame(t *testing.T) {
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/player?show=demo", nil)
+
+	Player().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("Player() status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	body := rec.Body.String()
+	wants := []string{
+		"function focusWithoutScroll",       // helper that suppresses focus-driven scroll exists
+		"preventScroll: true",               // uses the standard scroll-suppression option
+		"focusWithoutScroll(boundaryNameEl", // boundary focus routes through the helper
+	}
+	for _, want := range wants {
+		if !strings.Contains(body, want) {
+			t.Fatalf("Player() body should contain %q so marking a boundary keeps the video in frame", want)
+		}
+	}
+	// The bare focus() calls that panned the video off-screen must all be rerouted.
+	if strings.Contains(body, "boundaryNameEl.focus(") {
+		t.Fatal("Player() body should no longer contain \"boundaryNameEl.focus(\": boundary focus must not scroll the video out of frame")
+	}
+}
+
+func TestPlayerShowsAlwaysVisibleShortcutsAffordance(t *testing.T) {
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/player?show=demo", nil)
+
+	Player().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("Player() status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	body := rec.Body.String()
+	wants := []string{
+		`id="shortcutsToggle"`, // always-visible affordance near the video
+		"getElementById('shortcutsToggle').addEventListener('click', openShortcutsHelp)", // wired to reveal the legend
+		`id="markStatus"`, // near-video status keeps the user oriented while marking
+	}
+	for _, want := range wants {
+		if !strings.Contains(body, want) {
+			t.Fatalf("Player() body should contain %q so keyboard shortcuts are discoverable without knowing ?", want)
+		}
+	}
+}
+
 func TestPlayerShowsChaptersBelowVideoWithoutRemove(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/player?show=demo", nil)
