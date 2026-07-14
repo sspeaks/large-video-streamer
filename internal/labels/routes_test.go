@@ -157,6 +157,67 @@ func TestRoutesAutodetectDoesNotRewriteExistingChaptersVTT(t *testing.T) {
 	}
 }
 
+func TestRoutesAutodetectPersistsBlackFreezeCandidatesOnly(t *testing.T) {
+	videoDir := t.TempDir()
+	hlsDir := t.TempDir()
+	store := New(config.Config{VideoDir: videoDir, HLSDir: hlsDir, StateDir: t.TempDir()})
+	if err := store.Save(VideoLabels{Video: "sample_video", Boundaries: []Boundary{{Name: "existing", Start: 5}}}); err != nil {
+		t.Fatalf("Save fixture: %v", err)
+	}
+	chaptersDir := filepath.Join(hlsDir, "sample_video")
+	if err := os.MkdirAll(chaptersDir, 0o755); err != nil {
+		t.Fatalf("create chapters dir: %v", err)
+	}
+	chaptersPath := filepath.Join(chaptersDir, "chapters.vtt")
+	const sentinel = "WEBVTT\n\nexisting chapter file\n"
+	if err := os.WriteFile(chaptersPath, []byte(sentinel), 0o644); err != nil {
+		t.Fatalf("write sentinel chapters.vtt: %v", err)
+	}
+	signals := &fakeAutodetectSignals{
+		blackSegments:  []detect.BlackSegment{{Start: 12, End: 13, Duration: 1}},
+		freezeSegments: []detect.FreezeSegment{{Start: 39, End: 42, Duration: 3}},
+	}
+	mux := authenticatedLabelServerMux(t, NewServer(store.cfg, store), signals)
+
+	res := serveLabelRequest(t, mux, http.MethodPost, "/labels/api/sample_video/autodetect", `{"lineup":[{"name":"quartet-a","songCount":2}],"useSilence":false,"useColor":true}`)
+	if res.Code != http.StatusOK {
+		t.Fatalf("POST autodetect status = %d, want %d; body %q", res.Code, http.StatusOK, res.Body.String())
+	}
+
+	var labels VideoLabels
+	if err := json.Unmarshal(res.Body.Bytes(), &labels); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(labels.Boundaries) != 1 || labels.Boundaries[0].Name != "existing" {
+		t.Fatalf("boundaries = %#v, want existing boundary only", labels.Boundaries)
+	}
+	if len(labels.Candidates) != 2 {
+		t.Fatalf("candidates = %#v, want black and freeze candidates", labels.Candidates)
+	}
+	if !candidateHasSource(labels.Candidates, autodetectSourceBlack) || !candidateHasSource(labels.Candidates, autodetectSourceFreeze) {
+		t.Fatalf("candidates = %#v, want black and freeze source metadata", labels.Candidates)
+	}
+	for _, candidate := range labels.Candidates {
+		if candidate.Status != "candidate" {
+			t.Fatalf("candidate = %#v, want status candidate until a reviewer promotes it", candidate)
+		}
+	}
+	chapters, err := os.ReadFile(chaptersPath)
+	if err != nil {
+		t.Fatalf("read chapters.vtt: %v", err)
+	}
+	if string(chapters) != sentinel {
+		t.Fatalf("chapters.vtt = %q, want existing sentinel unchanged because autodetect only saves candidates", chapters)
+	}
+	saved, err := store.Load("sample_video")
+	if err != nil {
+		t.Fatalf("Load saved labels: %v", err)
+	}
+	if len(saved.Boundaries) != 1 || len(saved.Candidates) != 2 || !candidateHasSource(saved.Candidates, autodetectSourceBlack) || !candidateHasSource(saved.Candidates, autodetectSourceFreeze) {
+		t.Fatalf("saved labels = %#v, want boundary unchanged and black/freeze candidates persisted", saved)
+	}
+}
+
 func TestRoutesAutodetectRejectsUnsafeShowBeforeSignals(t *testing.T) {
 	store := New(config.Config{VideoDir: t.TempDir(), HLSDir: t.TempDir(), StateDir: t.TempDir()})
 	signals := &fakeAutodetectSignals{}
@@ -277,6 +338,17 @@ func assertHasBoundary(t *testing.T, labels VideoLabels, want Boundary) {
 	t.Fatalf("Boundaries = %#v, want to contain %#v", labels.Boundaries, want)
 }
 
+func candidateHasSource(candidates []Candidate, source string) bool {
+	for _, candidate := range candidates {
+		for _, got := range candidate.Sources {
+			if got == source {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func authenticatedLabelMux(t *testing.T, store *Store) *http.ServeMux {
 	t.Helper()
 	authn := auth.New(config.Config{LoginUser: "group-a", LoginPass: "group-b", CookieSecret: []byte("01234567890123456789012345678901")})
@@ -297,16 +369,33 @@ func authenticatedLabelServerMux(t *testing.T, srv *Server, signals *fakeAutodet
 }
 
 type fakeAutodetectSignals struct {
-	silences     []detect.Silence
-	silenceErr   error
-	silencePath  string
-	silenceCalls int
-	scenes       []detect.SceneChange
-	sceneErr     error
-	colorSamples []detect.ColorSample
-	colorErr     error
-	ocrResults   map[float64]detect.OCRResult
-	ocrErr       error
+	silences       []detect.Silence
+	audio          detect.AudioSignals
+	silenceErr     error
+	silencePath    string
+	silenceCalls   int
+	scenes         []detect.SceneChange
+	sceneErr       error
+	sceneWindows   []autodetectSignalWindow
+	visualWindows  []autodetectSignalWindow
+	blackSegments  []detect.BlackSegment
+	blackErr       error
+	blackCalls     int
+	blackWindows   []autodetectSignalWindow
+	freezeSegments []detect.FreezeSegment
+	freezeErr      error
+	freezeCalls    int
+	freezeWindows  []autodetectSignalWindow
+	colorSamples   []detect.ColorSample
+	colorErr       error
+	colorWindows   []autodetectSignalWindow
+	ocrResults     map[float64]detect.OCRResult
+	ocrErr         error
+}
+
+type autodetectSignalWindow struct {
+	start    float64
+	duration float64
 }
 
 func (f *fakeAutodetectSignals) DetectSilence(path string, noiseDB float64, minDur float64) ([]detect.Silence, error) {
@@ -318,6 +407,39 @@ func (f *fakeAutodetectSignals) DetectSilence(path string, noiseDB float64, minD
 	return f.silences, nil
 }
 
+func (f *fakeAutodetectSignals) DetectAudio(path string, noiseDB float64, minDur float64) (detect.AudioSignals, error) {
+	f.silenceCalls++
+	f.silencePath = path
+	if f.silenceErr != nil {
+		return detect.AudioSignals{}, f.silenceErr
+	}
+	if len(f.audio.Silences) != 0 || len(f.audio.LoudnessSamples) != 0 || len(f.audio.LoudnessOnsets) != 0 {
+		return f.audio, nil
+	}
+	return detect.AudioSignals{Silences: f.silences}, nil
+}
+
+func (f *fakeAutodetectSignals) DetectVisual(path string, sceneThreshold float64, sceneColorSampleRate float64, blackMinDuration float64, freezeMinDuration float64) (detect.VisualSignals, error) {
+	if f.sceneErr != nil {
+		return detect.VisualSignals{}, f.sceneErr
+	}
+	if f.blackErr != nil {
+		return detect.VisualSignals{}, f.blackErr
+	}
+	if f.freezeErr != nil {
+		return detect.VisualSignals{}, f.freezeErr
+	}
+	if f.colorErr != nil {
+		return detect.VisualSignals{}, f.colorErr
+	}
+	return detect.VisualSignals{Scenes: f.scenes, ColorSamples: f.colorSamples, BlackSegments: f.blackSegments, FreezeSegments: f.freezeSegments}, nil
+}
+
+func (f *fakeAutodetectSignals) DetectVisualWindow(path string, sceneThreshold float64, sceneColorSampleRate float64, blackMinDuration float64, freezeMinDuration float64, start float64, duration float64) (detect.VisualSignals, error) {
+	f.visualWindows = append(f.visualWindows, autodetectSignalWindow{start: start, duration: duration})
+	return f.DetectVisual(path, sceneThreshold, sceneColorSampleRate, blackMinDuration, freezeMinDuration)
+}
+
 func (f *fakeAutodetectSignals) DetectSceneChanges(path string, threshold float64) ([]detect.SceneChange, error) {
 	if f.sceneErr != nil {
 		return nil, f.sceneErr
@@ -325,7 +447,55 @@ func (f *fakeAutodetectSignals) DetectSceneChanges(path string, threshold float6
 	return f.scenes, nil
 }
 
+func (f *fakeAutodetectSignals) DetectSceneChangesWindow(path string, threshold float64, sampleRate float64, start float64, duration float64) ([]detect.SceneChange, error) {
+	f.sceneWindows = append(f.sceneWindows, autodetectSignalWindow{start: start, duration: duration})
+	if f.sceneErr != nil {
+		return nil, f.sceneErr
+	}
+	return f.scenes, nil
+}
+
+func (f *fakeAutodetectSignals) DetectBlackSegments(path string, minDuration float64) ([]detect.BlackSegment, error) {
+	f.blackCalls++
+	if f.blackErr != nil {
+		return nil, f.blackErr
+	}
+	return f.blackSegments, nil
+}
+
+func (f *fakeAutodetectSignals) DetectBlackSegmentsWindow(path string, minDuration float64, start float64, duration float64) ([]detect.BlackSegment, error) {
+	f.blackWindows = append(f.blackWindows, autodetectSignalWindow{start: start, duration: duration})
+	if f.blackErr != nil {
+		return nil, f.blackErr
+	}
+	return f.blackSegments, nil
+}
+
+func (f *fakeAutodetectSignals) DetectFreezeSegments(path string, minDuration float64) ([]detect.FreezeSegment, error) {
+	f.freezeCalls++
+	if f.freezeErr != nil {
+		return nil, f.freezeErr
+	}
+	return f.freezeSegments, nil
+}
+
+func (f *fakeAutodetectSignals) DetectFreezeSegmentsWindow(path string, minDuration float64, start float64, duration float64) ([]detect.FreezeSegment, error) {
+	f.freezeWindows = append(f.freezeWindows, autodetectSignalWindow{start: start, duration: duration})
+	if f.freezeErr != nil {
+		return nil, f.freezeErr
+	}
+	return f.freezeSegments, nil
+}
+
 func (f *fakeAutodetectSignals) SampleFrameColors(path string, sampleRate float64, crop string) ([]detect.ColorSample, error) {
+	if f.colorErr != nil {
+		return nil, f.colorErr
+	}
+	return f.colorSamples, nil
+}
+
+func (f *fakeAutodetectSignals) SampleFrameColorsWindow(path string, sampleRate float64, crop string, start float64, duration float64) ([]detect.ColorSample, error) {
+	f.colorWindows = append(f.colorWindows, autodetectSignalWindow{start: start, duration: duration})
 	if f.colorErr != nil {
 		return nil, f.colorErr
 	}

@@ -15,6 +15,22 @@ nix develop -c go vet ./...
 
 The dev shell includes Go, `gopls`, `gotools`, `ffmpeg`, and `mkvtoolnix`.
 
+### Optional auto-detect benchmark
+
+`internal/labels` includes a skipped-by-default benchmark for evaluating boundary
+suggestions against a local sample folder. The folder is expected to contain
+`timestamps.txt`, `semi-finals order.txt`, and `semi_finals.mkv`; no sample media
+or real event names should be committed.
+
+```sh
+VIDSTREAMER_AUTODETECT_SAMPLE_DIR=/path/to/sample \
+  go test ./internal/labels -run TestAutodetectSampleBenchmark -v -count=1
+```
+
+The benchmark anonymizes report rows as `group-01`, `group-02`, etc., caches raw
+signal output under the user cache directory, and reports precision/recall
+against a ±20 second tolerance.
+
 ## Runtime configuration
 
 `internal/config.Load` reads:

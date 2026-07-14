@@ -21,6 +21,8 @@ type Candidate struct {
 	Confidence    float64  `json:"confidence,omitempty"`
 	SuggestedName string   `json:"suggestedName,omitempty"`
 	Conflict      bool     `json:"conflict,omitempty"`
+	VisualAnchor  float64  `json:"-"`
+	FusionAnchor  float64  `json:"-"`
 }
 
 // VideoLabels is the JSON sidecar model stored as <video>.labels.json.

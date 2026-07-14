@@ -1,0 +1,44 @@
+{
+  "agents": {
+    "product-systems-lead": {
+      "persistent_name": "Morpheus",
+      "universe": "The Matrix",
+      "created_at": "2026-07-14T14:49:22.465-07:00",
+      "used_at": "2026-07-14T14:49:22.465-07:00",
+      "legacy_named": false,
+      "status": "active"
+    },
+    "detection-labeling-engineer": {
+      "persistent_name": "Neo",
+      "universe": "The Matrix",
+      "created_at": "2026-07-14T14:49:22.465-07:00",
+      "used_at": "2026-07-14T14:49:22.465-07:00",
+      "legacy_named": false,
+      "status": "active"
+    },
+    "streaming-platform-engineer": {
+      "persistent_name": "Trinity",
+      "universe": "The Matrix",
+      "created_at": "2026-07-14T14:49:22.465-07:00",
+      "used_at": "2026-07-14T14:49:22.465-07:00",
+      "legacy_named": false,
+      "status": "active"
+    },
+    "application-engineer": {
+      "persistent_name": "Tank",
+      "universe": "The Matrix",
+      "created_at": "2026-07-14T14:49:22.465-07:00",
+      "used_at": "2026-07-14T14:49:22.465-07:00",
+      "legacy_named": false,
+      "status": "active"
+    },
+    "quality-performance-engineer": {
+      "persistent_name": "Mouse",
+      "universe": "The Matrix",
+      "created_at": "2026-07-14T14:49:22.465-07:00",
+      "used_at": "2026-07-14T14:49:22.465-07:00",
+      "legacy_named": false,
+      "status": "active"
+    }
+  }
+}

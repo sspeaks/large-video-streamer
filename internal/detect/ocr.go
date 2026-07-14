@@ -3,13 +3,17 @@ package detect
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 )
+
+var ErrOCRFrameNotFound = errors.New("ocr frame not found")
 
 // OCRResult is recognized lower-third text near a video timestamp.
 type OCRResult struct {
@@ -20,15 +24,21 @@ type OCRResult struct {
 
 // OCROptions controls lower-third frame extraction and word filtering.
 type OCROptions struct {
-	Crop          string
-	MinConfidence float64
-	TempRoot      string
-	Language      string
+	Crop             string
+	MinConfidence    float64
+	TempRoot         string
+	Language         string
+	PageSegMode      int
+	PreprocessFilter string
+	ProbeOffsets     []float64
 }
 
 const (
 	DefaultOCRLowerThirdCrop = "crop=iw:ih*0.35:0:ih*0.65"
 	DefaultOCRMinConfidence  = 50.0
+	DefaultOCRPageSegMode    = 6
+
+	ocrSeekPairPrerollSeconds = 5.0
 )
 
 // OCRLowerThird extracts a lower-third frame near timestamp and runs Tesseract TSV OCR.
@@ -60,18 +70,20 @@ func OCRLowerThird(path string, timestamp float64, options OCROptions) (OCRResul
 		return OCRResult{}, err
 	}
 
-	framePath := filepath.Join(dir, "frame.png")
-	if err := extractOCRFrame(ffmpeg, path, timestamp, framePath, options.Crop); err != nil {
-		return OCRResult{}, err
-	}
+	filter := ocrFrameFilter(options.Crop, options.PreprocessFilter)
+	return runOCRProbes(timestamp, options, dir, func(probeTime float64, framePath string) (OCRResult, error) {
+		if err := extractOCRFrame(ffmpeg, path, probeTime, framePath, filter); err != nil {
+			return OCRResult{}, err
+		}
 
-	tsv, err := runTesseractTSV(tesseract, framePath, options.Language)
-	if err != nil {
-		return OCRResult{}, err
-	}
+		tsv, err := runTesseractTSV(tesseract, framePath, options.Language, options.PageSegMode)
+		if err != nil {
+			return OCRResult{}, err
+		}
 
-	text, confidence := parseTesseractTSV(tsv, options.MinConfidence)
-	return OCRResult{Time: timestamp, Text: text, Confidence: confidence}, nil
+		text, confidence := parseTesseractTSV(tsv, options.MinConfidence)
+		return OCRResult{Time: probeTime, Text: text, Confidence: confidence}, nil
+	})
 }
 
 func normalizeOCROptions(videoPath string, options OCROptions) (OCROptions, error) {
@@ -83,6 +95,27 @@ func normalizeOCROptions(videoPath string, options OCROptions) (OCROptions, erro
 	}
 	if strings.TrimSpace(options.TempRoot) == "" {
 		options.TempRoot = os.TempDir()
+	}
+	if options.PageSegMode == 0 {
+		options.PageSegMode = DefaultOCRPageSegMode
+	}
+	if options.PageSegMode < 1 || options.PageSegMode > 13 {
+		return OCROptions{}, fmt.Errorf("OCR PSM must be between 1 and 13: %d", options.PageSegMode)
+	}
+	options.PreprocessFilter = strings.TrimSpace(options.PreprocessFilter)
+	if len(options.ProbeOffsets) == 0 {
+		options.ProbeOffsets = []float64{0}
+	} else {
+		probeOffsets := append([]float64(nil), options.ProbeOffsets...)
+		for i, offset := range probeOffsets {
+			if math.IsNaN(offset) || math.IsInf(offset, 0) {
+				return OCROptions{}, fmt.Errorf("OCR probe offset must be finite: %s", formatFloat(offset))
+			}
+			if offset == 0 {
+				probeOffsets[i] = 0
+			}
+		}
+		options.ProbeOffsets = probeOffsets
 	}
 
 	if err := ensurePathOutsideVideoDir(options.TempRoot, videoPath); err != nil {
@@ -139,21 +172,57 @@ func pathWithinDir(path string, dir string) bool {
 	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
 }
 
-func extractOCRFrame(ffmpeg string, videoPath string, timestamp float64, framePath string, crop string) error {
-	args := []string{
-		"-y",
-		"-hide_banner",
-		"-nostats",
-		"-ss", formatFloat(timestamp),
-		"-i", videoPath,
-		"-an",
-		"-frames:v", "1",
-	}
-	if strings.TrimSpace(crop) != "" {
-		args = append(args, "-vf", crop)
-	}
-	args = append(args, framePath)
+type ocrProbeRunner func(probeTime float64, framePath string) (OCRResult, error)
 
+func runOCRProbes(timestamp float64, options OCROptions, dir string, run ocrProbeRunner) (OCRResult, error) {
+	offsets := options.ProbeOffsets
+	if len(offsets) == 0 {
+		offsets = []float64{0}
+	}
+
+	var best OCRResult
+	haveResult := false
+	hadNoFrame := false
+	for i, offset := range offsets {
+		probeTime := timestamp + offset
+		if probeTime < 0 {
+			hadNoFrame = true
+			continue
+		}
+		framePath := filepath.Join(dir, fmt.Sprintf("frame-%d.png", i))
+		result, err := run(probeTime, framePath)
+		if err != nil {
+			if errors.Is(err, ErrOCRFrameNotFound) {
+				hadNoFrame = true
+				continue
+			}
+			return OCRResult{}, fmt.Errorf("OCR probe at %.3fs failed: %w", probeTime, err)
+		}
+		if !haveResult || betterOCRResult(result, best) {
+			best = result
+			haveResult = true
+		}
+	}
+	if haveResult {
+		return best, nil
+	}
+	if hadNoFrame {
+		return OCRResult{}, fmt.Errorf("%w: no OCR probe produced a frame near %.3fs", ErrOCRFrameNotFound, timestamp)
+	}
+	return OCRResult{}, fmt.Errorf("%w: no OCR probes configured near %.3fs", ErrOCRFrameNotFound, timestamp)
+}
+
+func betterOCRResult(candidate OCRResult, current OCRResult) bool {
+	candidateHasText := strings.TrimSpace(candidate.Text) != ""
+	currentHasText := strings.TrimSpace(current.Text) != ""
+	if candidateHasText != currentHasText {
+		return candidateHasText
+	}
+	return candidate.Confidence > current.Confidence
+}
+
+func extractOCRFrame(ffmpeg string, videoPath string, timestamp float64, framePath string, filter string) error {
+	args := buildOCRFrameArgs(videoPath, timestamp, framePath, filter)
 	var stdout, stderr bytes.Buffer
 	cmd := exec.Command(ffmpeg, args...)
 	cmd.Stdout = &stdout
@@ -162,17 +231,61 @@ func extractOCRFrame(ffmpeg string, videoPath string, timestamp float64, framePa
 		return fmt.Errorf("ffmpeg OCR frame extraction failed: %w: %s", err, ocrCommandErrorText(stdout.String(), stderr.String()))
 	}
 	if _, err := os.Stat(framePath); err != nil {
-		return fmt.Errorf("ffmpeg OCR frame extraction did not create frame: %w", err)
+		if os.IsNotExist(err) {
+			return fmt.Errorf("%w: ffmpeg OCR frame extraction did not create frame", ErrOCRFrameNotFound)
+		}
+		return fmt.Errorf("stat OCR frame: %w", err)
 	}
 	return nil
 }
 
-func runTesseractTSV(tesseract string, imagePath string, language string) (string, error) {
+func buildOCRFrameArgs(videoPath string, timestamp float64, framePath string, filter string) []string {
+	args := []string{
+		"-y",
+		"-hide_banner",
+		"-nostats",
+	}
+	if timestamp >= ocrSeekPairPrerollSeconds {
+		args = append(args,
+			"-ss", formatFloat(timestamp-ocrSeekPairPrerollSeconds),
+			"-i", videoPath,
+			"-ss", formatFloat(ocrSeekPairPrerollSeconds),
+		)
+	} else {
+		args = append(args,
+			"-ss", formatFloat(timestamp),
+			"-i", videoPath,
+		)
+	}
+	args = append(args,
+		"-an",
+		"-frames:v", "1",
+	)
+	if strings.TrimSpace(filter) != "" {
+		args = append(args, "-vf", filter)
+	}
+	args = append(args, framePath)
+	return args
+}
+
+func ocrFrameFilter(crop string, preprocess string) string {
+	crop = strings.TrimSpace(crop)
+	preprocess = strings.TrimSpace(preprocess)
+	if crop == "" {
+		return preprocess
+	}
+	if preprocess == "" {
+		return crop
+	}
+	return crop + "," + preprocess
+}
+
+func runTesseractTSV(tesseract string, imagePath string, language string, pageSegMode int) (string, error) {
 	args := []string{imagePath, "stdout"}
 	if strings.TrimSpace(language) != "" {
 		args = append(args, "-l", language)
 	}
-	args = append(args, "--psm", "6", "tsv")
+	args = append(args, "--psm", strconv.Itoa(pageSegMode), "tsv")
 
 	var stdout, stderr bytes.Buffer
 	cmd := exec.Command(tesseract, args...)

@@ -58,9 +58,12 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
     .bulk-actions input, .inline-name { width: 10rem; }
     .autodetect-panel textarea { width: 100%; min-height: 6rem; }
     .source-badges { display: flex; flex-wrap: wrap; gap: .25rem; }
-    .source-badge, .conflict-badge { display: inline-flex; align-items: center; min-height: 1.5rem; padding: .1rem .45rem; border-radius: 999px; font-size: .85em; font-weight: 700; }
+    .source-badge, .conflict-badge, .low-confidence-badge { display: inline-flex; align-items: center; min-height: 1.5rem; padding: .1rem .45rem; border-radius: 999px; font-size: .85em; font-weight: 700; }
     .source-badge { background: var(--surface-input); color: var(--text); border: 1px solid var(--border); }
+    .source-badge--black { background: #111827; color: #f9fafb; border-color: #6b7280; }
+    .source-badge--freeze { background: #dbeafe; color: #172554; border-color: #93c5fd; }
     .conflict-badge { background: var(--danger); color: var(--danger-text); }
+    .low-confidence-badge { background: #facc15; color: #422006; }
     .status-line { min-height: 1.8rem; }
     .status { min-height: 1.4rem; color: var(--accent); }
     .help { margin-top: 0; color: var(--text-muted); }
@@ -72,6 +75,8 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
     .grid { display: grid; gap: 1rem; grid-template-columns: minmax(0, 1fr); }
     .empty-state { padding: 1rem; color: var(--text-muted); text-align: center; }
     tr.candidate-conflict > td { box-shadow: inset 3px 0 0 var(--danger); }
+    tr.candidate-low-confidence > td { box-shadow: inset 3px 0 0 #facc15; }
+    tr.candidate-conflict.candidate-low-confidence > td { box-shadow: inset 3px 0 0 var(--danger), inset 6px 0 0 #facc15; }
     tr.candidate-current > td { background: var(--surface-input); }
     tr.candidate-current { outline: 2px solid var(--accent); outline-offset: -2px; }
     video { width: 100%; max-height: 60vh; background: var(--bg-deep); border-radius: .5rem; }
@@ -112,7 +117,7 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
       <button id="export" class="secondary mutating-control">Export timestamps</button>
       <button id="import" class="secondary mutating-control">Import timestamps</button>
       <button id="detect" class="secondary mutating-control">Detect silences</button>
-      <button id="autodetect" class="secondary mutating-control">Auto-detect</button>
+      <button id="autodetect" class="secondary mutating-control">Suggest boundaries</button>
     </div>
     <details class="help" id="shortcuts-help">
       <summary>Keyboard shortcuts</summary>
@@ -147,19 +152,20 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
         <h2>Candidates</h2>
         <p class="help">Review detected silences, then promote useful ones into named boundaries or reject noise.</p>
         <div class="autodetect-panel" aria-label="Auto-detect setup">
-          <label class="field-label" for="autodetect-lineup">Lineup for Auto-detect</label>
-          <p class="help" id="autodetect-lineup-help">Enter one quartet name per non-empty line. Auto-detect will use the lineup to suggest candidate names.</p>
+          <label class="field-label" for="autodetect-lineup">Lineup for boundary suggestions</label>
+          <p class="help" id="autodetect-lineup-help">Enter one quartet name per non-empty line. Suggestions use the lineup to prefill candidate names, but still need review.</p>
           <textarea id="autodetect-lineup" name="autodetect-lineup" class="editable-control" autocomplete="off" data-lpignore="true" aria-describedby="autodetect-lineup-help" placeholder="Quartet A&#10;Quartet B"></textarea>
           <div class="autodetect-options" aria-label="Auto-detect signal sources">
             <label><input type="checkbox" id="autodetect-use-silence" name="autodetect-use-silence" class="mutating-control" data-lpignore="true" checked> Use silence</label>
             <label><input type="checkbox" id="autodetect-use-color" name="autodetect-use-color" class="mutating-control" data-lpignore="true" checked> Use color</label>
-            <label><input type="checkbox" id="autodetect-use-ocr" name="autodetect-use-ocr" class="mutating-control" data-lpignore="true" checked> Use OCR</label>
+            <label><input type="checkbox" id="autodetect-use-ocr" name="autodetect-use-ocr" class="mutating-control" data-lpignore="true"> Use OCR (slow)</label>
           </div>
         </div>
         <div class="candidate-tools" aria-label="Candidate filters">
           <label for="candidate-sort">Sort
             <select id="candidate-sort" name="candidate-sort" autocomplete="off" data-lpignore="true">
               <option value="duration-desc">Duration, longest first</option>
+              <option value="review-priority">Review priority</option>
               <option value="time-asc">Time, earliest first</option>
             </select>
           </label>
@@ -309,22 +315,53 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
       return status === 'named' || status === 'rejected';
     };
     const candidateSources = (candidate) => Array.isArray(candidate.sources) ? candidate.sources.map(source => String(source || '').trim()).filter(Boolean) : [];
+    const sourceDisplayName = (source) => ({
+      silence: 'Silence',
+      lineup: 'Lineup',
+      scene: 'Scene',
+      color: 'Color',
+      black: 'Black',
+      freeze: 'Freeze',
+      ocr: 'OCR',
+    }[String(source || '').toLowerCase()] || displayName(source));
+    const sourceBadgeClass = (source) => {
+      const normalized = String(source || '').toLowerCase();
+      if (['silence', 'lineup', 'scene', 'color', 'black', 'freeze', 'ocr'].includes(normalized)) {
+        return 'source-badge source-badge--' + normalized;
+      }
+      return 'source-badge';
+    };
     const renderSourceBadges = (candidate) => {
       const sources = candidateSources(candidate);
       if (sources.length === 0) return '<span class="help">—</span>';
-      return '<span class="source-badges">' + sources.map(source => '<span class="source-badge">' + escapeText(source) + '</span>').join('') + '</span>';
+      return '<span class="source-badges">' + sources.map(source => '<span class="' + sourceBadgeClass(source) + '">' + escapeText(sourceDisplayName(source)) + '</span>').join('') + '</span>';
     };
     const formatConfidence = (value) => {
       const confidence = Number(value);
       if (!Number.isFinite(confidence) || confidence <= 0) return '—';
       return Math.round(confidence * 100) + '%';
     };
+    const candidateLowConfidence = (candidate) => {
+      const confidence = Number(candidate && candidate.confidence);
+      return Number.isFinite(confidence) && confidence > 0 && confidence < 0.75;
+    };
     const renderCandidateStatus = (candidate) => {
       const status = escapeText(candidateStatus(candidate));
-      if (!candidate.conflict) return status;
-      return status + ' <span class="conflict-badge">Conflict</span>';
+      const badges = [];
+      if (candidate.conflict) badges.push('<span class="conflict-badge">Conflict</span>');
+      if (candidateLowConfidence(candidate)) badges.push('<span class="low-confidence-badge">Low confidence</span>');
+      if (badges.length === 0) return status;
+      return status + ' ' + badges.join(' ');
     };
     const candidateKey = (candidate) => String(Number(candidate.time) || 0) + '|' + String(Number(candidate.duration) || 0);
+    const candidateReviewPriority = (candidate) => {
+      let priority = 0;
+      if (candidate.conflict) priority += 100;
+      if (candidateLowConfidence(candidate)) priority += 50;
+      if (candidateSources(candidate).length > 1) priority += 10;
+      if (candidateSuggestedName(candidate)) priority += 5;
+      return priority;
+    };
     const candidateItems = () => {
       normalizeLabels();
       const minDuration = Math.max(0, Number(minDurationControl.value) || 0);
@@ -333,7 +370,9 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
         if ((Number(item.candidate.duration) || 0) < minDuration) return false;
         return true;
       });
-      if (sortControl.value === 'duration-desc') {
+      if (sortControl.value === 'review-priority') {
+        items.sort((a, b) => candidateReviewPriority(b.candidate) - candidateReviewPriority(a.candidate) || a.index - b.index);
+      } else if (sortControl.value === 'duration-desc') {
         items.sort((a, b) => (Number(b.candidate.duration) || 0) - (Number(a.candidate.duration) || 0));
       } else {
         items.sort((a, b) => (Number(a.candidate.time) || 0) - (Number(b.candidate.time) || 0));
@@ -353,7 +392,7 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
     const selectedVisiblePendingItems = () => candidateItems().filter((item) => selectedCandidates.has(item.key) && !isHandledCandidate(item.candidate));
     const highConfidenceCandidateItems = () => {
       normalizeLabels();
-      return labels.candidates.map((candidate, index) => ({ candidate: candidate, index: index, key: candidateKey(candidate) })).filter((item) => !isHandledCandidate(item.candidate) && Number(item.candidate.confidence) >= 0.85 && candidateSuggestedName(item.candidate));
+      return labels.candidates.map((candidate, index) => ({ candidate: candidate, index: index, key: candidateKey(candidate) })).filter((item) => !isHandledCandidate(item.candidate) && !item.candidate.conflict && Number(item.candidate.confidence) >= 0.85 && candidateSuggestedName(item.candidate));
     };
     const updateBulkControls = () => {
       const selected = selectedVisiblePendingItems();
@@ -372,7 +411,7 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
       if (!busy) busyOperation = '';
       document.querySelectorAll('.mutating-control, .editable-control').forEach((control) => { control.disabled = busy; });
       detectButton.textContent = busy && busyOperation === 'detect' ? 'Detecting…' : 'Detect silences';
-      autoDetectButton.textContent = busy && busyOperation === 'autodetect' ? 'Auto-detecting…' : 'Auto-detect';
+      autoDetectButton.textContent = busy && busyOperation === 'autodetect' ? 'Suggesting…' : 'Suggest boundaries';
       updateBulkControls();
     };
     const boundaryNameForBulk = (base, index, total) => total === 1 ? base : base + '-' + String(index + 1);
@@ -535,6 +574,7 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
           const row = document.createElement('tr');
           if (item.key === currentKey) { row.classList.add('candidate-current'); row.setAttribute('aria-current', 'true'); }
           if (candidate.conflict) { row.classList.add('candidate-conflict'); }
+          if (candidateLowConfidence(candidate)) { row.classList.add('candidate-low-confidence'); }
           const checked = selectedCandidates.has(item.key) ? ' checked' : '';
           const handled = isHandledCandidate(candidate);
           const disabled = handled ? ' disabled' : '';
@@ -593,12 +633,12 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
       if (busy) return;
       const lineup = parseAutodetectLineup();
       if (lineup.length === 0) {
-        setStatus('Enter at least one quartet name before auto-detecting.');
+        setStatus('Enter at least one quartet name before suggesting boundaries.');
         autodetectLineup.focus();
         return;
       }
       setBusy(true, 'autodetect');
-      setStatus('Auto-detecting candidates (silence, color, and OCR)…');
+      setStatus('Suggesting boundary candidates from selected signals…');
       try {
         const res = await fetch(api + '/autodetect', {
           method: 'POST',
@@ -617,9 +657,9 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
         render();
         const n = labels.candidates.filter(c => candidateStatus(c) === 'candidate').length;
         setDirty(true);
-        setStatus('Auto-detected ' + n + ' pending candidate boundary(ies) — review, promote or reject, then Save.');
+        setStatus('Suggested ' + n + ' pending candidate boundary(ies) — review, promote or reject, then Save.');
       } catch (err) {
-        setStatus('Auto-detect failed: ' + err.message);
+        setStatus('Suggest boundaries failed: ' + err.message);
       } finally {
         setBusy(false);
       }

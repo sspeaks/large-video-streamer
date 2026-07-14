@@ -2,6 +2,7 @@ package labels
 
 import (
 	"bytes"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -121,6 +122,7 @@ func TestLabelsPageIncludesAutodetectControlsAndRequest(t *testing.T) {
 	if err := labelsPageTemplate.Execute(&buf, struct{ Show string }{Show: "quartet_finals"}); err != nil {
 		t.Fatalf("execute labels page template: %v", err)
 	}
+
 	out := buf.String()
 
 	wants := []string{
@@ -134,12 +136,42 @@ func TestLabelsPageIncludesAutodetectControlsAndRequest(t *testing.T) {
 		"useSilence: autodetectUseSilence.checked",
 		"useColor: autodetectUseColor.checked",
 		"useOCR: autodetectUseOCR.checked",
-		"Auto-detect failed:",
+		"Suggest boundaries failed:",
 	}
 	for _, want := range wants {
 		if !strings.Contains(out, want) {
 			t.Fatalf("labels page should contain %q to wire up autodetect controls", want)
 		}
+	}
+}
+
+func TestLabelsPageDefaultsVisualOnAndOCROff(t *testing.T) {
+	var buf bytes.Buffer
+	if err := labelsPageTemplate.Execute(&buf, struct{ Show string }{Show: "quartet_finals"}); err != nil {
+		t.Fatalf("execute labels page template: %v", err)
+	}
+	out := buf.String()
+
+	colorInput := regexp.MustCompile(`<input[^>]*id="autodetect-use-color"[^>]*>`).FindString(out)
+	if colorInput == "" {
+		t.Fatal("labels page should render autodetect-use-color checkbox")
+	}
+	if !strings.Contains(colorInput, "checked") {
+		t.Fatalf("autodetect-use-color should be checked by default, input = %q", colorInput)
+	}
+	if strings.Contains(out, "Use color (slow)") {
+		t.Fatal("color autodetect label should no longer say slow")
+	}
+
+	ocrInput := regexp.MustCompile(`<input[^>]*id="autodetect-use-ocr"[^>]*>`).FindString(out)
+	if ocrInput == "" {
+		t.Fatal("labels page should render autodetect-use-ocr checkbox")
+	}
+	if strings.Contains(ocrInput, "checked") {
+		t.Fatalf("autodetect-use-ocr should stay unchecked by default, input = %q", ocrInput)
+	}
+	if !strings.Contains(out, "Use OCR (slow)") {
+		t.Fatal("OCR autodetect label should keep the slow warning")
 	}
 }
 
@@ -167,6 +199,37 @@ func TestLabelsPageRendersAutodetectCandidateMetadata(t *testing.T) {
 	}
 }
 
+func TestLabelsPageHighlightsReviewPriorityMetadata(t *testing.T) {
+	var buf bytes.Buffer
+	if err := labelsPageTemplate.Execute(&buf, struct{ Show string }{Show: "quartet_finals"}); err != nil {
+		t.Fatalf("execute labels page template: %v", err)
+	}
+	out := buf.String()
+
+	wants := []string{
+		"Review priority",
+		"const sourceDisplayName = (source) =>",
+		"black: 'Black'",
+		"freeze: 'Freeze'",
+		"source-badge--black",
+		"source-badge--freeze",
+		"const candidateLowConfidence = (candidate) =>",
+		"Low confidence",
+		"const candidateReviewPriority = (candidate) =>",
+		"sortControl.value === 'review-priority'",
+		"labels.candidates.map((candidate, index) => ({ candidate: candidate, index: index, key: candidateKey(candidate) }))",
+		"|| a.index - b.index",
+	}
+	for _, want := range wants {
+		if !strings.Contains(out, want) {
+			t.Fatalf("labels page should contain %q to prioritize uncertain/conflicting black/freeze candidates for review", want)
+		}
+	}
+	if strings.Contains(out, "labels.candidates.sort") {
+		t.Fatal("labels page should sort a copied candidate item list, not mutate saved/API candidate order")
+	}
+}
+
 func TestLabelsPageIncludesHighConfidenceBulkApply(t *testing.T) {
 	var buf bytes.Buffer
 	if err := labelsPageTemplate.Execute(&buf, struct{ Show string }{Show: "quartet_finals"}); err != nil {
@@ -179,6 +242,7 @@ func TestLabelsPageIncludesHighConfidenceBulkApply(t *testing.T) {
 		"const highConfidenceCandidateItems = () =>",
 		"Number(item.candidate.confidence) >= 0.85",
 		"candidateSuggestedName(item.candidate)",
+		"!item.candidate.conflict",
 		"promoteCandidate(item.candidate, candidateSuggestedName(item.candidate))",
 		"Save to persist.",
 	}

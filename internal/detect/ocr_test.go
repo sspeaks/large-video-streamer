@@ -1,9 +1,12 @@
 package detect
 
 import (
+	"errors"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -105,6 +108,178 @@ func TestNormalizeOCROptionsRejectsTempRootSymlinkUnderVideoDir(t *testing.T) {
 
 	if err == nil {
 		t.Fatal("normalizeOCROptions accepted temp root symlinked under video directory")
+	}
+}
+
+func TestNormalizeOCROptionsDefaultsTimingAndPreprocessing(t *testing.T) {
+	root := t.TempDir()
+	videoDir := filepath.Join(root, "videos")
+	tempRoot := filepath.Join(root, "ocr-temp")
+	if err := os.Mkdir(videoDir, 0o755); err != nil {
+		t.Fatalf("create video dir: %v", err)
+	}
+	if err := os.Mkdir(tempRoot, 0o755); err != nil {
+		t.Fatalf("create OCR temp root: %v", err)
+	}
+	videoPath := filepath.Join(videoDir, "sample.mkv")
+	if err := os.WriteFile(videoPath, nil, 0o644); err != nil {
+		t.Fatalf("create video file: %v", err)
+	}
+
+	got, err := normalizeOCROptions(videoPath, OCROptions{TempRoot: tempRoot})
+	if err != nil {
+		t.Fatalf("normalizeOCROptions returned error: %v", err)
+	}
+
+	if got.Crop != DefaultOCRLowerThirdCrop {
+		t.Fatalf("Crop = %q, want default %q", got.Crop, DefaultOCRLowerThirdCrop)
+	}
+	if got.MinConfidence != DefaultOCRMinConfidence {
+		t.Fatalf("MinConfidence = %v, want %v", got.MinConfidence, DefaultOCRMinConfidence)
+	}
+	if got.PageSegMode != DefaultOCRPageSegMode {
+		t.Fatalf("PageSegMode = %d, want %d", got.PageSegMode, DefaultOCRPageSegMode)
+	}
+	if got.PreprocessFilter != "" {
+		t.Fatalf("PreprocessFilter = %q, want empty default", got.PreprocessFilter)
+	}
+	if !slices.Equal(got.ProbeOffsets, []float64{0}) {
+		t.Fatalf("ProbeOffsets = %#v, want [0]", got.ProbeOffsets)
+	}
+}
+
+func TestNormalizeOCROptionsRejectsInvalidPSMAndProbeOffsets(t *testing.T) {
+	tests := []struct {
+		name    string
+		options OCROptions
+		want    string
+	}{
+		{
+			name:    "negative PSM",
+			options: OCROptions{PageSegMode: -1},
+			want:    "OCR PSM",
+		},
+		{
+			name:    "too large PSM",
+			options: OCROptions{PageSegMode: 14},
+			want:    "OCR PSM",
+		},
+		{
+			name:    "non-finite probe offset",
+			options: OCROptions{ProbeOffsets: []float64{math.Inf(1)}},
+			want:    "OCR probe offset",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := normalizeOCROptions("sample.mkv", tt.options)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error = %v, want it to contain %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestOCRFrameFilterComposesPreprocessingAfterCrop(t *testing.T) {
+	got := ocrFrameFilter("crop=iw:ih*0.5:0:ih*0.5", "scale=iw*2:ih*2,unsharp=5:5:1")
+	want := "crop=iw:ih*0.5:0:ih*0.5,scale=iw*2:ih*2,unsharp=5:5:1"
+	if got != want {
+		t.Fatalf("filter = %q, want %q", got, want)
+	}
+
+	got = ocrFrameFilter("crop=iw:ih*0.5:0:ih*0.5", " \t ")
+	want = "crop=iw:ih*0.5:0:ih*0.5"
+	if got != want {
+		t.Fatalf("filter without preprocessing = %q, want %q", got, want)
+	}
+}
+
+func TestBuildOCRFrameArgsUsesSeekPairForLargeTimestamps(t *testing.T) {
+	args := buildOCRFrameArgs("video.mkv", 42.25, "frame.png", "crop=iw:ih")
+	wantPrefix := []string{
+		"-y",
+		"-hide_banner",
+		"-nostats",
+		"-ss", "37.25",
+		"-i", "video.mkv",
+		"-ss", "5",
+	}
+	if !slices.Equal(args[:len(wantPrefix)], wantPrefix) {
+		t.Fatalf("args prefix = %#v, want %#v; full args %#v", args[:len(wantPrefix)], wantPrefix, args)
+	}
+	if !slices.Contains(args, "-vf") || args[len(args)-1] != "frame.png" {
+		t.Fatalf("args = %#v, want filter flag and output frame", args)
+	}
+}
+
+func TestBuildOCRFrameArgsUsesSingleSeekForSmallTimestamps(t *testing.T) {
+	args := buildOCRFrameArgs("video.mkv", 3.5, "frame.png", "")
+	wantPrefix := []string{
+		"-y",
+		"-hide_banner",
+		"-nostats",
+		"-ss", "3.5",
+		"-i", "video.mkv",
+		"-an",
+		"-frames:v", "1",
+	}
+	if !slices.Equal(args[:len(wantPrefix)], wantPrefix) {
+		t.Fatalf("args prefix = %#v, want %#v; full args %#v", args[:len(wantPrefix)], wantPrefix, args)
+	}
+	if slices.Contains(args, "-vf") {
+		t.Fatalf("args = %#v, want no filter flag for empty filter", args)
+	}
+}
+
+func TestRunOCRProbesSelectsHighestConfidenceAndSkipsNoFrame(t *testing.T) {
+	var probes []float64
+	result, err := runOCRProbes(10, OCROptions{ProbeOffsets: []float64{0, 2, -1}}, "ocr-work", func(probeTime float64, framePath string) (OCRResult, error) {
+		probes = append(probes, probeTime)
+		switch probeTime {
+		case 10:
+			return OCRResult{}, ErrOCRFrameNotFound
+		case 12:
+			return OCRResult{Time: 12, Text: "low", Confidence: 45}, nil
+		case 9:
+			return OCRResult{Time: 9, Text: "high", Confidence: 92}, nil
+		default:
+			t.Fatalf("unexpected probe time %v with frame path %q", probeTime, framePath)
+			return OCRResult{}, nil
+		}
+	})
+	if err != nil {
+		t.Fatalf("runOCRProbes returned error: %v", err)
+	}
+	if !slices.Equal(probes, []float64{10, 12, 9}) {
+		t.Fatalf("probes = %#v, want [10 12 9]", probes)
+	}
+	if result.Text != "high" || result.Time != 9 || result.Confidence != 92 {
+		t.Fatalf("result = %#v, want high-confidence probe at 9s", result)
+	}
+}
+
+func TestRunOCRProbesReturnsNoFrameWhenAllProbesMiss(t *testing.T) {
+	calls := 0
+	_, err := runOCRProbes(1, OCROptions{ProbeOffsets: []float64{-2, 0, 2}}, "ocr-work", func(probeTime float64, framePath string) (OCRResult, error) {
+		calls++
+		return OCRResult{}, ErrOCRFrameNotFound
+	})
+	if !errors.Is(err, ErrOCRFrameNotFound) {
+		t.Fatalf("error = %v, want ErrOCRFrameNotFound", err)
+	}
+	if calls != 2 {
+		t.Fatalf("calls = %d, want 2 non-negative probes", calls)
+	}
+}
+
+func TestRunOCRProbesReturnsToolErrorsImmediately(t *testing.T) {
+	boom := errors.New("tesseract exploded")
+	_, err := runOCRProbes(10, OCROptions{ProbeOffsets: []float64{0, 2}}, "ocr-work", func(probeTime float64, framePath string) (OCRResult, error) {
+		return OCRResult{}, boom
+	})
+	if !errors.Is(err, boom) {
+		t.Fatalf("error = %v, want wrapped tool error", err)
 	}
 }
 
