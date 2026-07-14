@@ -69,12 +69,24 @@
 
 *, *::before, *::after { box-sizing: border-box; }
 
+html {
+  min-width: 320px;
+  min-height: 100%;
+  background: var(--bg-deep);
+}
+
 body {
   margin: 0;
   min-height: 100vh;
-  background: var(--bg);
+  background:
+    radial-gradient(circle at 15% -10%, rgb(122 162 255 / 0.12), transparent 34rem),
+    radial-gradient(circle at 95% 8%, rgb(143 179 255 / 0.07), transparent 30rem),
+    var(--bg);
   color: var(--text);
   font-family: var(--font-sans);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
 p { line-height: 1.6; }
@@ -83,6 +95,9 @@ p { line-height: 1.6; }
 
 a { color: var(--accent); text-decoration: none; }
 a:hover { color: var(--focus); }
+button, input, textarea, select { font: inherit; }
+button { touch-action: manipulation; }
+::selection { background: var(--accent-solid); color: var(--accent-solid-text); }
 
 /* ---- Surfaces ---- */
 .card, .panel {
@@ -118,6 +133,7 @@ a:hover { color: var(--focus); }
 .btn--secondary:hover { border-color: var(--accent); color: var(--text); }
 .btn--danger { background: var(--danger); color: var(--danger-text); border-color: var(--danger); }
 .btn--pill { border-radius: var(--radius-pill); }
+.btn svg { width: 1.1rem; height: 1.1rem; flex: 0 0 auto; }
 
 /* ---- Form controls ---- */
 input, textarea, select {
@@ -168,6 +184,55 @@ textarea:focus:not(:focus-visible) { outline: none; }
 .save-state.dirty { background: var(--warn-bg); color: var(--warn-text); }
 
 /* ---- Helpers ---- */
+.eyebrow {
+  margin: 0 0 .45rem;
+  color: var(--accent);
+  font-size: .75rem;
+  font-weight: 800;
+  letter-spacing: .12em;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+.badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.75rem;
+  padding: .15rem .65rem;
+  border: 1px solid var(--secondary-border);
+  border-radius: var(--radius-pill);
+  background: var(--surface-input);
+  color: var(--text-muted);
+  font-size: .8rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.spinner {
+  width: 1.25rem;
+  height: 1.25rem;
+  flex: 0 0 auto;
+  border: 2px solid var(--secondary-border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 800ms linear infinite;
+}
+.skip-link:focus {
+  position: fixed;
+  top: 1rem;
+  left: 1rem;
+  z-index: 100;
+  width: auto;
+  height: auto;
+  margin: 0;
+  padding: .65rem 1rem;
+  overflow: visible;
+  clip: auto;
+  white-space: normal;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow);
+}
 .sr-only {
   position: absolute; width: 1px; height: 1px;
   padding: 0; margin: -1px; overflow: hidden;
@@ -175,7 +240,11 @@ textarea:focus:not(:focus-visible) { outline: none; }
 }
 [hidden] { display: none !important; }
 
+@keyframes spin { to { transform: rotate(360deg); } }
+
 @media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
   .btn { transition: none; }
   .btn:active { transform: none; }
+  .spinner { animation-duration: 1600ms; }
 }
