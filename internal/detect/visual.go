@@ -132,20 +132,7 @@ func detectVisualSignalsWindow(path string, sceneThreshold float64, sceneColorSa
 	}
 
 	var stdout, stderr bytes.Buffer
-	args := []string{
-		"-hide_banner",
-		"-nostats",
-		"-loglevel", "info",
-	}
-	args = appendWindowInputArgs(args, path, start, duration)
-	args = append(args,
-		"-an",
-		"-filter_complex", buildVisualFilterGraph(sceneThreshold, sceneColorSampleRate, blackMinDuration, freezeMinDuration),
-		"-map", "[slowout]",
-		"-map", "[fullout]",
-		"-f", "null",
-		"-",
-	)
+	args := buildVisualFFmpegArgs(path, sceneThreshold, sceneColorSampleRate, blackMinDuration, freezeMinDuration, start, duration)
 	cmd := exec.Command(ffmpeg, args...)
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -164,9 +151,25 @@ func detectVisualSignalsWindow(path string, sceneThreshold float64, sceneColorSa
 	return signals, nil
 }
 
+func buildVisualFFmpegArgs(path string, sceneThreshold float64, sceneColorSampleRate float64, blackMinDuration float64, freezeMinDuration float64, start float64, duration float64) []string {
+	args := []string{
+		"-hide_banner",
+		"-nostats",
+		"-loglevel", "info",
+	}
+	args = appendWindowInputArgs(args, path, start, duration)
+	return append(args,
+		"-an",
+		"-filter_complex", buildVisualFilterGraph(sceneThreshold, sceneColorSampleRate, blackMinDuration, freezeMinDuration),
+		"-map", "[fullout]",
+		"-f", "null",
+		"-",
+	)
+}
+
 func buildVisualFilterGraph(sceneThreshold float64, sceneColorSampleRate float64, blackMinDuration float64, freezeMinDuration float64) string {
 	return "[0:v]split=2[full][slow];" +
-		"[slow]" + buildSceneColorFilterChain(sceneThreshold, sceneColorSampleRate) + "[slowout];" +
+		"[slow]" + buildSceneColorFilterChain(sceneThreshold, sceneColorSampleRate) + ",nullsink;" +
 		"[full]" + buildBlackFilterChain(blackMinDuration) + "," + buildFreezeFilterChain(freezeMinDuration) + "[fullout]"
 }
 

@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"math"
 	"os/exec"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -214,6 +216,66 @@ func TestVisualFFmpegIntegration(t *testing.T) {
 	shifts := DetectColorShifts(samples, 20, 1)
 	if len(shifts) == 0 {
 		t.Fatalf("DetectColorShifts returned no shifts from samples: %#v", samples)
+	}
+}
+
+func TestBuildVisualFFmpegArgsMapsOnlyFullRateBranch(t *testing.T) {
+	args := buildVisualFFmpegArgs("synthetic.mkv", 10, 0.5, 0.2, 2, 1.5, 0.5)
+
+	var mapped []string
+	for i, arg := range args {
+		if arg == "-map" && i+1 < len(args) {
+			mapped = append(mapped, args[i+1])
+		}
+	}
+	if len(mapped) != 1 || mapped[0] != "[fullout]" {
+		t.Fatalf("mapped outputs = %#v, want only [fullout]", mapped)
+	}
+
+	graph := buildVisualFilterGraph(10, 0.5, 0.2, 2)
+	if strings.Contains(graph, "[slowout]") {
+		t.Fatalf("sampled analysis branch is still mapped: %s", graph)
+	}
+	if !strings.Contains(graph, "metadata=mode=print:file=-,nullsink") {
+		t.Fatalf("sampled analysis branch does not terminate in nullsink: %s", graph)
+	}
+}
+
+func TestDetectVisualWindowHandlesH264TailWithoutSampledFrames(t *testing.T) {
+	ffmpeg, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		t.Skipf("ffmpeg not found: %v", err)
+	}
+	encoders, err := exec.Command(ffmpeg, "-hide_banner", "-encoders").CombinedOutput()
+	if err != nil {
+		t.Fatalf("list ffmpeg encoders: %v: %s", err, encoders)
+	}
+	if !strings.Contains(string(encoders), "libx264") {
+		t.Skip("ffmpeg does not provide the libx264 encoder")
+	}
+
+	path := filepath.Join(t.TempDir(), "synthetic-h264.mkv")
+	output, err := exec.Command(
+		ffmpeg,
+		"-hide_banner",
+		"-loglevel", "error",
+		"-f", "lavfi",
+		"-i", "testsrc2=size=64x64:rate=60:duration=2",
+		"-c:v", "libx264",
+		"-pix_fmt", "yuv420p",
+		"-g", "60",
+		path,
+	).CombinedOutput()
+	if err != nil {
+		t.Fatalf("generate synthetic H.264 Matroska input: %v: %s", err, output)
+	}
+
+	scenes, samples, black, freeze, err := DetectVisualWindow(path, 10, 0.5, 0.2, 2, 1.5, 0.5)
+	if err != nil {
+		t.Fatalf("DetectVisualWindow returned error for short H.264 tail: %v", err)
+	}
+	if len(scenes) != 0 || len(samples) != 0 || len(black) != 0 || len(freeze) != 0 {
+		t.Fatalf("short tail signals = scenes:%#v samples:%#v black:%#v freeze:%#v, want none", scenes, samples, black, freeze)
 	}
 }
 
