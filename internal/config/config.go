@@ -62,6 +62,30 @@ func Load() (Config, error) {
 	if stateDir == "" {
 		stateDir = filepath.Dir(hlsDir)
 	}
+
+	// Normalize VideoDir, HLSDir, and StateDir to absolute paths so that
+	// diagnostic redaction and filesystem operations work correctly regardless
+	// of whether the caller supplied a relative path. filepath.Abs only fails
+	// when os.Getwd fails; treat that as an explicit config-load error with
+	// field context rather than silently leaving a relative path in place.
+	if videoDir != "" {
+		if abs, err := filepath.Abs(videoDir); err != nil {
+			validationErrs = append(validationErrs, fmt.Errorf("VideoDir: resolve absolute path: %w", err))
+		} else {
+			videoDir = abs
+		}
+	}
+	if abs, err := filepath.Abs(hlsDir); err != nil {
+		validationErrs = append(validationErrs, fmt.Errorf("HLSDir: resolve absolute path: %w", err))
+	} else {
+		hlsDir = abs
+	}
+	if abs, err := filepath.Abs(stateDir); err != nil {
+		validationErrs = append(validationErrs, fmt.Errorf("StateDir: resolve absolute path: %w", err))
+	} else {
+		stateDir = abs
+	}
+
 	dbPath := os.Getenv("DB_PATH")
 	if dbPath == "" {
 		dbPath = filepath.Join(stateDir, "app.db")
