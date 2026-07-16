@@ -303,13 +303,43 @@ func TestPlayerIncludesFirstVisitLabelingTip(t *testing.T) {
 		"dismissLabelingTip",
 		"initLabelingTip",
 		"handleTipClickOutside",
-		`role="tooltip"`,
+		`role="note"`,
 		"aria-describedby",
 	}
 	for _, want := range wants {
 		if !strings.Contains(body, want) {
-			t.Fatalf("Player() body does not contain %q for first-visit tooltip (AC4)", want)
+			t.Fatalf("Player() body does not contain %q for first-visit tip (AC4)", want)
 		}
+	}
+	// WAI-ARIA: tooltip role must not contain interactive descendants.
+	// Verify the callout uses role="note" (not role="tooltip").
+	if strings.Contains(body, `role="tooltip"`) {
+		t.Fatal("Player() body must not use role=\"tooltip\" for an interactive callout — use role=\"note\" instead (WAI-ARIA #25)")
+	}
+}
+
+// TestPlayerLabelingCalloutUsesValidARIARole is a regression guard for issue
+// #25: WAI-ARIA forbids interactive descendants inside role="tooltip".
+// The labeling tip must use role="note" (an informational callout that can
+// contain interactive elements) so its "Got it" button is accessible.
+func TestPlayerLabelingCalloutUsesValidARIARole(t *testing.T) {
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/player?show=demo", nil)
+
+	Player().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("Player() status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, `role="tooltip"`) {
+		t.Fatal("Player() must not use role=\"tooltip\" for interactive callout — WAI-ARIA tooltip role forbids interactive descendants (issue #25)")
+	}
+	if !strings.Contains(body, `role="note"`) {
+		t.Fatal("Player() labeling callout should use role=\"note\" for an interactive informational region")
+	}
+	if !strings.Contains(body, `id="labelingTipDismiss"`) {
+		t.Fatal("Player() labeling callout must retain the interactive 'Got it' dismiss button")
 	}
 }
 
