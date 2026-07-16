@@ -31,61 +31,11 @@ The benchmark anonymizes report rows as `group-01`, `group-02`, etc., caches raw
 signal output under the user cache directory, and reports precision/recall
 against a ±20 second tolerance.
 
-## Runtime configuration
+## NixOS module configuration
 
-`internal/config.Load` reads:
+The recommended deployment method is via the NixOS module `services.vidStreamer`, which handles systemd service setup, state directories, file permissions, and secret management.
 
-- `LISTEN_ADDR`: optional, defaults to `127.0.0.1:8080`.
-- `VIDEO_DIR`: required, read-only source folder of videos.
-- `HLS_DIR`: optional writable HLS output folder, defaults to `$STATE_DIRECTORY/hls` or `state/hls`.
-- `LOGIN_USER` or `LOGIN_USER_FILE`: required login username; file variant wins.
-- `LOGIN_PASS` or `LOGIN_PASS_FILE`: required login password; file variant wins.
-- `COOKIE_SECRET` or `COOKIE_SECRET_FILE`: optional base64 string that decodes to at least 32 bytes; file variant wins. If omitted, the server generates and persists one under the state directory.
-- `DB_PATH`: optional SQLite database path, defaults to `<StateDir>/app.db`.
-- `VIDSTREAMER_FLAT_FILE_STATE`: optional rollback flag (`1`/`true`) that keeps using legacy `<StateDir>/shares.json` and `<StateDir>/labels/*.labels.json` instead of SQLite.
-
-Secret file values are read with trailing newlines removed. On normal startup the server opens SQLite, applies schema migrations, and idempotently imports legacy `shares.json` and label sidecars without deleting them. To roll back, set `VIDSTREAMER_FLAT_FILE_STATE=1`; `cookie-secret` remains a flat file.
-
-## Package layout and interface contract
-
-- `internal/config`: owns environment loading.
-  - `type Config` contains runtime paths, credentials, auth/dev flags, and SQLite/flat-file state settings.
-  - `func Load() (Config, error)`
-- `internal/auth`: owns login/logout routes and auth gates.
-  - `type Authenticator struct`
-  - `func New(cfg config.Config) *Authenticator`
-  - `func (a *Authenticator) RegisterRoutes(mux *http.ServeMux)`
-  - `func (a *Authenticator) RequirePage(next http.Handler) http.Handler`
-  - `func (a *Authenticator) RequireMedia(next http.Handler) http.Handler`
-- `internal/hls`: owns generated HLS serving.
-  - `type Server struct`
-  - `func New(cfg config.Config) *Server`
-  - `func (s *Server) Handler() http.Handler`
-- `internal/labels`: owns label persistence seams, UI/API routes, and timestamp import/export.
-  - `type Boundary struct { Name string; Start float64 }`
-  - `type Candidate struct { Time float64; Duration float64; Status string }`
-  - `type VideoLabels struct { Video string; Boundaries []Boundary; Candidates []Candidate }`
-  - `type Store struct`
-  - `func New(cfg config.Config) *Store`
-  - `func (s *Store) RegisterRoutes(mux *http.ServeMux, a *auth.Authenticator)`
-  - `func (s *Store) Load(video string) (VideoLabels, error)`
-  - `func (s *Store) Save(labels VideoLabels) error`
-  - `func (s *Store) ToWebVTT(labels VideoLabels) string`
-  - `func (s *Store) ImportTimestamps(r io.Reader) (VideoLabels, error)`
-  - `func (s *Store) ExportTimestamps(labels VideoLabels) string`
-- `internal/segment`: owns ffprobe/ffmpeg HLS generation.
-  - `func Segment(cfg config.Config, videoName string) error`
-- `internal/detect`: owns ffmpeg silence detection.
-  - `func DetectSilence(path string, noiseDB float64, minDur float64) ([]labels.Candidate, error)`
-- `internal/web`: owns embedded assets.
-  - `var Assets embed.FS`
-  - `func Handler() http.Handler`
-  - `func Index() http.Handler`
-  - `func Player() http.Handler`
-
-## NixOS module
-
-The flake exports `nixosModules.vidStreamer` and `nixosModules.default`. Add it to a NixOS configuration flake and wire the package from the same input:
+### Minimal example
 
 ```nix
 {
@@ -101,13 +51,8 @@ The flake exports `nixosModules.vidStreamer` and `nixosModules.default`. Add it 
             enable = true;
             package = vid-streamer.packages.x86_64-linux.default;
             videoDir = "/srv/videos";
-            # Optional: grants the service group access and applies ACLs so
-            # top-level .mkv files in /srv/videos are group-readable.
-            videoAccessGroup = "users";
-            listenAddr = "127.0.0.1:8080";
             loginUserFile = "/run/secrets/vid-streamer-user";
             loginPassFile = "/run/secrets/vid-streamer-pass";
-            cookieSecretFile = "/run/secrets/vid-streamer-cookie-secret";
           };
         }
       ];
@@ -116,10 +61,75 @@ The flake exports `nixosModules.vidStreamer` and `nixosModules.default`. Add it 
 }
 ```
 
-The NixOS module creates `hlsDir` with service ownership before systemd applies
-`ReadWritePaths`, removes stale hidden `.*.tmp` HLS directories on service start,
-adds `supplementaryGroups` to both the system user and service process, and can
-manage source-video group access with `videoAccessGroup`. Source video files must
-still be readable by the service user or one of those groups. SQLite state is stored in the systemd state directory by default. Legacy flat files are left in place after import so rollback remains possible with `services.vidStreamer.legacyFlatFileState = true`.
+### Required options
 
-Set `services.vidStreamer.noAuth = true` only for trusted/local deployments; it disables the credential file requirements. For local development, `nix run .#dev` starts the dev server.
+- **`enable`** — set to `true` to activate the service.
+- **`package`** — must provide the `vid-streamer` binary (e.g., from `vid-streamer.packages.x86_64-linux.default`).
+- **`videoDir`** — path to a directory containing `.mkv` files (read-only source, must be readable by the service).
+- **`loginUserFile`** — path to a file containing the login username; **required unless `noAuth = true`**. Do not set if running with `noAuth = true`.
+- **`loginPassFile`** — path to a file containing the login password; **required unless `noAuth = true`**. Do not set if running with `noAuth = true`.
+
+### Optional options with defaults
+
+| Option | Type | Default | Purpose |
+|--------|------|---------|---------|
+| `hlsDir` | path | `/var/lib/vid-streamer/hls` | Writable directory for generated HLS playlists and segments |
+| `listenAddr` | string | `127.0.0.1:8080` | HTTP server bind address and port |
+| `openFirewall` | bool | `false` | Open the TCP port from `listenAddr` in the local firewall |
+| `user` | string | `vid-streamer` | UNIX user running the service |
+| `group` | string | `vid-streamer` | UNIX group running the service |
+| `supplementaryGroups` | list | `[]` | Additional groups for the service process (e.g., `["users"]` if videoDir is group-readable by another group) |
+| `videoAccessGroup` | string or `null` | `null` | If set, the module grants this group read access to videos in videoDir via ACLs and adds it to `supplementaryGroups` |
+| `noAuth` | bool | `false` | Run without authentication (trusted networks only); disables login credential requirements |
+| `segmentOnStart` | bool | `true` | Segment all videos in videoDir into HLS when the service starts |
+| `legacyFlatFileState` | bool | `false` | Use legacy flat-file state (shares.json and labels/*.labels.json) instead of SQLite; intended only for rollback after migration |
+| `cookieSecretFile` | path or `null` | `null` | Optional path to a file containing a base64-encoded, ≥32-byte cookie-signing secret. If left unset, the server auto-generates one on first start and persists it in the systemd state directory. |
+
+### Conditional requirements
+
+- When `noAuth = false` (the default), `loginUserFile` and `loginPassFile` are **required**; the module asserts their presence.
+- When `noAuth = true`, authentication is disabled entirely and login credentials are ignored.
+- `cookieSecretFile` is always optional. When unset and `noAuth = false`, the server auto-generates and persists a cookie secret in its state directory (no manual management needed).
+
+### Advanced configuration
+
+```nix
+{
+  services.vidStreamer = {
+    enable = true;
+    package = vid-streamer.packages.x86_64-linux.default;
+    videoDir = "/srv/videos";
+    videoAccessGroup = "users";  # Grant the 'users' group read access to videos
+    listenAddr = "0.0.0.0:8080";  # Listen on all interfaces
+    openFirewall = true;
+    loginUserFile = "/run/secrets/vid-streamer-user";
+    loginPassFile = "/run/secrets/vid-streamer-pass";
+    cookieSecretFile = "/run/secrets/vid-streamer-cookie-secret";  # Optional; omit for auto-generation
+    segmentOnStart = false;  # Do not segment on startup; segment manually on demand
+  };
+}
+```
+
+### State management
+
+- **SQLite state** (default) — The service stores labels, shares, and internal state in SQLite under the systemd `StateDirectory` (`/var/lib/vid-streamer/` by default).
+- **HLS output** — Generated HLS playlists and segments are written to `hlsDir`, created with service ownership before the service starts.
+- **Legacy flat-file rollback** — If you previously used flat-file state and need to roll back after migration to SQLite, set `legacyFlatFileState = true`. The flat-file imports remain in place so rollback is always possible.
+- **Stale temporary directories** — On each service start, the module removes any stale `.*.tmp` HLS directories.
+
+## Development and non-NixOS environments
+
+For local development or non-NixOS environments, the Go binary reads environment variables directly via `internal/config.Load`:
+
+- **`VIDEO_DIR`** (required) — Read-only source folder of videos.
+- **`LISTEN_ADDR`** (optional, defaults to `127.0.0.1:8080`) — HTTP server bind address and port.
+- **`HLS_DIR`** (optional, defaults to `$STATE_DIRECTORY/hls` or `state/hls`) — Writable HLS output folder.
+- **`LOGIN_USER`** or **`LOGIN_USER_FILE`** — Login username or path to file containing it (file variant takes precedence).
+- **`LOGIN_PASS`** or **`LOGIN_PASS_FILE`** — Login password or path to file containing it (file variant takes precedence).
+- **`COOKIE_SECRET`** or **`COOKIE_SECRET_FILE`** — Base64-encoded cookie secret (≥32 bytes when decoded) or path to file; file variant takes precedence. If omitted, auto-generated and persisted.
+- **`DB_PATH`** (optional) — SQLite database path; defaults to `<StateDir>/app.db`.
+- **`VIDSTREAMER_FLAT_FILE_STATE`** (optional, set to `1` or `true`) — Use legacy flat-file state instead of SQLite.
+- **`VIDSTREAMER_SEGMENT_ON_START`** (optional, set to `1` or `true`) — Segment all videos on startup.
+- **`VIDSTREAMER_DEV_NOAUTH`** (optional, set to `1` or `true`) — Run without authentication (development only).
+
+On startup, the server opens SQLite, applies schema migrations, and idempotently imports legacy `shares.json` and label sidecars without deleting them. To revert to flat-file state, set `VIDSTREAMER_FLAT_FILE_STATE=1`; the `cookie-secret` file persists separately.
