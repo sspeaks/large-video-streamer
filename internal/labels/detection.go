@@ -2,7 +2,10 @@ package labels
 
 import (
 	"fmt"
+	"log"
 	"path/filepath"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -18,6 +21,8 @@ const (
 
 	detectionOperationSilence    detectionOperation = "detect"
 	detectionOperationAutodetect detectionOperation = "autodetect"
+
+	detectionPublicError = "Detection failed. Check the source video and try again."
 )
 
 type detectionStatus struct {
@@ -34,6 +39,10 @@ type detectionOperation string
 type silenceDetector func(path string, noiseDB float64, minDur float64) ([]detect.Silence, error)
 type candidateBuilder func() ([]Candidate, error)
 
+type detectionLogger interface {
+	Printf(format string, args ...any)
+}
+
 type detectionJobKey struct {
 	show      string
 	operation detectionOperation
@@ -45,6 +54,7 @@ type detectionManager struct {
 	store      LabelStore
 	mutationMu *sync.Mutex
 	detect     silenceDetector
+	logger     detectionLogger
 
 	mu   sync.Mutex
 	jobs map[detectionJobKey]detectionStatus
@@ -57,6 +67,7 @@ func newDetectionManager(srv *Server, cfg config.Config, store LabelStore, mutat
 		store:      store,
 		mutationMu: mutationMu,
 		detect:     detect.DetectSilence,
+		logger:     log.Default(),
 		jobs:       make(map[detectionJobKey]detectionStatus),
 	}
 }
@@ -156,6 +167,13 @@ func (m *detectionManager) run(key detectionJobKey, build candidateBuilder) {
 
 func (m *detectionManager) finish(key detectionJobKey, candidateCount int, err error) {
 	now := time.Now().UTC()
+	if err != nil {
+		m.logger.Printf(
+			"detection job failed (operation=%s): %s",
+			key.operation,
+			redactDetectionDiagnostic(err.Error(), m.cfg, key.show),
+		)
+	}
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -165,10 +183,67 @@ func (m *detectionManager) finish(key detectionJobKey, candidateCount int, err e
 	status.CandidateCount = candidateCount
 	if err != nil {
 		status.State = detectionFailed
-		status.Error = err.Error()
+		status.Error = detectionPublicError
 	} else {
 		status.State = detectionCompleted
 		status.Error = ""
 	}
 	m.jobs[key] = status
+}
+
+type diagnosticRedaction struct {
+	value       string
+	replacement string
+}
+
+func redactDetectionDiagnostic(message string, cfg config.Config, show string) string {
+	sourceFilename := show + ".mkv"
+	sourcePath := filepath.Join(cfg.VideoDir, sourceFilename)
+
+	var redactions []diagnosticRedaction
+	redactions = appendPathRedactions(redactions, sourcePath, "[redacted-source]")
+	redactions = append(redactions,
+		diagnosticRedaction{value: sourceFilename, replacement: "[redacted-source]"},
+		diagnosticRedaction{value: show, replacement: "[redacted-source]"},
+	)
+	for _, root := range []string{cfg.VideoDir, cfg.StateDir, cfg.HLSDir} {
+		if safeDiagnosticRoot(root) {
+			redactions = appendPathRedactions(redactions, root, "[redacted-path]")
+		}
+	}
+	sort.SliceStable(redactions, func(i, j int) bool {
+		return len(redactions[i].value) > len(redactions[j].value)
+	})
+
+	seen := make(map[string]struct{}, len(redactions))
+	replacements := make([]string, 0, len(redactions)*2)
+	for _, redaction := range redactions {
+		if redaction.value == "" {
+			continue
+		}
+		if _, ok := seen[redaction.value]; ok {
+			continue
+		}
+		seen[redaction.value] = struct{}{}
+		replacements = append(replacements, redaction.value, redaction.replacement)
+	}
+	return strings.NewReplacer(replacements...).Replace(message)
+}
+
+func appendPathRedactions(redactions []diagnosticRedaction, path, replacement string) []diagnosticRedaction {
+	slashPath := filepath.ToSlash(path)
+	return append(redactions,
+		diagnosticRedaction{value: path, replacement: replacement},
+		diagnosticRedaction{value: slashPath, replacement: replacement},
+		diagnosticRedaction{value: strings.ReplaceAll(slashPath, "/", `\`), replacement: replacement},
+	)
+}
+
+func safeDiagnosticRoot(path string) bool {
+	if path == "" {
+		return false
+	}
+	clean := filepath.Clean(path)
+	volumeRoot := filepath.VolumeName(clean) + string(filepath.Separator)
+	return filepath.IsAbs(clean) && clean != volumeRoot
 }
