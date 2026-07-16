@@ -1,8 +1,10 @@
 package labels
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -234,22 +236,34 @@ func TestRoutesAutodetectRejectsUnsafeShowBeforeSignals(t *testing.T) {
 	}
 }
 
-func TestRoutesAutodetectSurfacesRequestedOCRErrors(t *testing.T) {
+func TestRoutesAutodetectReturnsSafeErrorAndLogsOCRDiagnostic(t *testing.T) {
 	store := New(config.Config{VideoDir: t.TempDir(), HLSDir: t.TempDir(), StateDir: t.TempDir()})
 	signals := &fakeAutodetectSignals{
 		silences: []detect.Silence{{Time: 10, Duration: 2}},
 		ocrErr:   errors.New("tesseract not found in PATH"),
 	}
 	srv := NewServer(store.cfg, store)
+	var logs bytes.Buffer
+	srv.detections.logger = log.New(&logs, "", 0)
 	mux := authenticatedLabelServerMux(t, srv, signals)
 
-	res := serveLabelRequest(t, mux, http.MethodPost, "/labels/api/sample_video/autodetect", `{"lineup":[{"name":"quartet-a"}],"useOCR":true}`)
+	res := serveLabelRequest(t, mux, http.MethodPost, "/labels/api/group-01/autodetect", `{"lineup":[{"name":"group-01"}],"useOCR":true}`)
 	if res.Code != http.StatusAccepted {
 		t.Fatalf("POST autodetect status = %d, want %d; body %q", res.Code, http.StatusAccepted, res.Body.String())
 	}
-	status := waitForServerDetectionState(t, srv, "sample_video", detectionOperationAutodetect, detectionFailed)
-	if !strings.Contains(status.Error, "tesseract not found") {
-		t.Fatalf("autodetect error = %q, want OCR error", status.Error)
+	waitForServerDetectionState(t, srv, "group-01", detectionOperationAutodetect, detectionFailed)
+	status := decodeDetectionStatus(
+		t,
+		serveLabelRequest(t, mux, http.MethodGet, "/labels/api/group-01/autodetect", ""),
+	)
+	if status.Error != detectionPublicError {
+		t.Fatalf("autodetect error = %q, want %q", status.Error, detectionPublicError)
+	}
+	if count := strings.Count(logs.String(), "detection job failed"); count != 1 {
+		t.Fatalf("detection failure log count = %d, want 1; log %q", count, logs.String())
+	}
+	if !strings.Contains(logs.String(), "tesseract not found in PATH") {
+		t.Fatalf("detection failure log = %q, want OCR diagnostic", logs.String())
 	}
 }
 

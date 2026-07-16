@@ -1,10 +1,13 @@
 package labels
 
 import (
+	"bytes"
 	"encoding/json"
-	"errors"
+	"fmt"
+	"log"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -96,28 +99,126 @@ func TestDetectRunsAfterStartRequestReturnsAndPersistsCandidates(t *testing.T) {
 	}
 }
 
-func TestDetectFailureIsAvailableFromStatusEndpoint(t *testing.T) {
-	cfg := config.Config{
-		VideoDir: t.TempDir(),
-		HLSDir:   t.TempDir(),
-		StateDir: t.TempDir(),
-		NoAuth:   true,
-	}
-	srv := NewServer(cfg, New(cfg))
-	srv.detections.detect = func(path string, noiseDB float64, minDur float64) ([]detect.Silence, error) {
-		return nil, errors.New("ffmpeg exited")
-	}
-	mux := noAuthLabelMux(srv)
+func TestDetectionFailureStatusAndLogAreSanitized(t *testing.T) {
+	const show = "group-01"
 
-	res := serveNoAuthLabelRequest(mux, http.MethodPost, "/labels/api/sample_video/detect", "")
-	if res.Code != http.StatusAccepted {
-		t.Fatalf("POST detect status = %d, want %d; body %q", res.Code, http.StatusAccepted, res.Body.String())
+	tests := []struct {
+		name      string
+		operation string
+		context   string
+		start     func(*Server, *http.ServeMux) *httptest.ResponseRecorder
+	}{
+		{
+			name:      "silence detection",
+			operation: "detect",
+			context:   "ffmpeg audio detect failed",
+			start: func(srv *Server, mux *http.ServeMux) *httptest.ResponseRecorder {
+				sourcePath := filepath.Join(srv.cfg.VideoDir, show+".mkv")
+				srv.detections.detect = func(path string, noiseDB float64, minDur float64) ([]detect.Silence, error) {
+					return nil, fmt.Errorf("ffmpeg audio detect failed: exit status 1: %s: Permission denied", sourcePath)
+				}
+				return serveNoAuthLabelRequest(mux, http.MethodPost, "/labels/api/"+show+"/detect", "")
+			},
+		},
+		{
+			name:      "visual autodetect",
+			operation: "autodetect",
+			context:   "ffmpeg visual detection failed",
+			start: func(srv *Server, mux *http.ServeMux) *httptest.ResponseRecorder {
+				sourcePath := filepath.Join(srv.cfg.VideoDir, show+".mkv")
+				sourceFilename := show + ".mkv"
+				srv.autodetectSignals = &fakeAutodetectSignals{
+					sceneErr: fmt.Errorf(
+						"ffmpeg visual detection failed: exit status 1: Input #0 from '%s'; %s: Invalid data found for %s",
+						sourcePath,
+						sourcePath,
+						sourceFilename,
+					),
+				}
+				return serveNoAuthLabelRequest(
+					mux,
+					http.MethodPost,
+					"/labels/api/"+show+"/autodetect",
+					`{"lineup":[{"name":"group-01"}],"useSilence":false,"useColor":true}`,
+				)
+			},
+		},
+		{
+			name:      "label persistence",
+			operation: "detect",
+			context:   "load detected labels",
+			start: func(srv *Server, mux *http.ServeMux) *httptest.ResponseRecorder {
+				statePath := filepath.Join(srv.cfg.StateDir, "labels", show+".labels.json")
+				srv.detections.detect = func(path string, noiseDB float64, minDur float64) ([]detect.Silence, error) {
+					return []detect.Silence{{Time: 10, Duration: 2}}, nil
+				}
+				srv.detections.store = detectionFailureStore{
+					loadErr: fmt.Errorf("load detected labels from %s: permission denied", statePath),
+				}
+				return serveNoAuthLabelRequest(mux, http.MethodPost, "/labels/api/"+show+"/detect", "")
+			},
+		},
 	}
 
-	status := waitForDetectionState(t, mux, "sample_video", "detect", detectionFailed)
-	if !strings.Contains(status.Error, "ffmpeg exited") {
-		t.Fatalf("detection error = %q, want ffmpeg failure", status.Error)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := config.Config{
+				VideoDir: t.TempDir(),
+				HLSDir:   t.TempDir(),
+				StateDir: t.TempDir(),
+				NoAuth:   true,
+			}
+			srv := NewServer(cfg, New(cfg))
+			var logs bytes.Buffer
+			srv.detections.logger = log.New(&logs, "", 0)
+			mux := noAuthLabelMux(srv)
+
+			res := tt.start(srv, mux)
+			if res.Code != http.StatusAccepted {
+				t.Fatalf("POST %s status = %d, want %d; body %q", tt.operation, res.Code, http.StatusAccepted, res.Body.String())
+			}
+
+			status := waitForDetectionState(t, mux, show, tt.operation, detectionFailed)
+			if status.Error != detectionPublicError {
+				t.Fatalf("detection error = %q, want %q", status.Error, detectionPublicError)
+			}
+			sourcePath := filepath.Join(cfg.VideoDir, show+".mkv")
+			if strings.Contains(status.Error, sourcePath) || strings.Contains(status.Error, show) || strings.Contains(status.Error, "ffmpeg") {
+				t.Fatalf("public detection error contains private diagnostics: %q", status.Error)
+			}
+
+			logged := logs.String()
+			if count := strings.Count(logged, "detection job failed"); count != 1 {
+				t.Fatalf("detection failure log count = %d, want 1; log %q", count, logged)
+			}
+			if strings.Contains(logged, sourcePath) || strings.Contains(logged, show+".mkv") || strings.Contains(logged, show) {
+				t.Fatalf("detection failure log contains source identifier: %q", logged)
+			}
+			for _, root := range []string{cfg.VideoDir, cfg.StateDir, cfg.HLSDir} {
+				if strings.Contains(logged, root) {
+					t.Fatalf("detection failure log contains configured path %q: %q", root, logged)
+				}
+			}
+			if !strings.Contains(logged, "[redacted-source]") {
+				t.Fatalf("detection failure log = %q, want redaction marker", logged)
+			}
+			if !strings.Contains(logged, tt.context) {
+				t.Fatalf("detection failure log = %q, want context %q", logged, tt.context)
+			}
+		})
 	}
+}
+
+type detectionFailureStore struct {
+	loadErr error
+}
+
+func (s detectionFailureStore) Load(string) (VideoLabels, error) {
+	return VideoLabels{}, s.loadErr
+}
+
+func (detectionFailureStore) Save(VideoLabels) error {
+	return nil
 }
 
 func TestAutodetectRunsAfterStartRequestReturnsAndPersistsCandidates(t *testing.T) {
