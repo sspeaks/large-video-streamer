@@ -405,3 +405,42 @@ func TestLabelsPagePreservesLineupAcrossTimestampImport(t *testing.T) {
 		}
 	}
 }
+
+// TestLabelsPageShowsGuidedOnboardingWhenEmpty verifies AC6: when boundaries
+// and candidates are both zero, the label editor shows a guided onboarding
+// panel and auto-expands the keyboard shortcuts <details> element.
+func TestLabelsPageShowsGuidedOnboardingWhenEmpty(t *testing.T) {
+	var buf bytes.Buffer
+	if err := labelsPageTemplate.Execute(&buf, struct{ Show string }{Show: "quartet_finals"}); err != nil {
+		t.Fatalf("execute labels page template: %v", err)
+	}
+	out := buf.String()
+
+	wants := []string{
+		`id="onboarding-panel"`,
+		"class=\"onboarding-panel\"",
+		"maybeShowOnboarding",
+		"No labels yet",
+		"shortcuts.open = true",
+		"onboarding-panel",
+	}
+	for _, want := range wants {
+		if !strings.Contains(out, want) {
+			t.Fatalf("labels page should contain %q for guided onboarding (AC6)", want)
+		}
+	}
+}
+
+// TestLabelsPageOnboardingUsesInstructionalPlaceholder verifies AC6: the
+// lineup textarea placeholder explains how to enter group names.
+func TestLabelsPageOnboardingUsesInstructionalPlaceholder(t *testing.T) {
+	var buf bytes.Buffer
+	if err := labelsPageTemplate.Execute(&buf, struct{ Show string }{Show: "quartet_finals"}); err != nil {
+		t.Fatalf("execute labels page template: %v", err)
+	}
+	out := buf.String()
+
+	if !strings.Contains(out, "Enter one group name per line") {
+		t.Fatal("labels page lineup textarea placeholder should contain instructional text (AC6)")
+	}
+}

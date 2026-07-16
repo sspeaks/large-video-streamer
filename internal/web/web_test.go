@@ -251,3 +251,136 @@ func TestHandlerServesVendoredHLS(t *testing.T) {
 		t.Fatalf("Handler() served an empty hls.min.js body")
 	}
 }
+
+// TestPlayerShowsGuidedEmptyStateWithDualCTAs verifies AC1–AC3: guided empty
+// state with "Add your first chapter" (triggers openChapterEditor) and
+// "Auto-detect" link (navigates to /labels/{show}).
+func TestPlayerShowsGuidedEmptyStateWithDualCTAs(t *testing.T) {
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/player?show=demo", nil)
+
+	Player().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("Player() status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	body := rec.Body.String()
+	wants := []string{
+		"renderGuidedEmptyState",
+		"lastCandidatesEmpty",
+		"Add your first chapter",
+		"Auto-detect",
+		"openChapterEditor",
+		"chapterGuideCtas",
+		"/labels/",
+	}
+	for _, want := range wants {
+		if !strings.Contains(body, want) {
+			t.Fatalf("Player() body does not contain %q for guided empty state (AC1–AC3)", want)
+		}
+	}
+}
+
+// TestPlayerIncludesFirstVisitLabelingTip verifies AC4: one-time tooltip on
+// the "Add chapter" button, dismissed via "Got it" / Escape / click-outside,
+// persisted in localStorage.
+func TestPlayerIncludesFirstVisitLabelingTip(t *testing.T) {
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/player?show=demo", nil)
+
+	Player().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("Player() status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	body := rec.Body.String()
+	wants := []string{
+		`id="labelingTip"`,
+		`id="labelingTipDismiss"`,
+		"Got it",
+		"labeling-tip-dismissed",
+		"localStorage",
+		"dismissLabelingTip",
+		"initLabelingTip",
+		"handleTipClickOutside",
+		`role="tooltip"`,
+		"aria-describedby",
+	}
+	for _, want := range wants {
+		if !strings.Contains(body, want) {
+			t.Fatalf("Player() body does not contain %q for first-visit tooltip (AC4)", want)
+		}
+	}
+}
+
+// TestPlayerLabelingTipDismissesOnEscape verifies AC4/AC7: Escape key wired to
+// dismissLabelingTip so the tip can be closed via keyboard.
+func TestPlayerLabelingTipDismissesOnEscape(t *testing.T) {
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/player?show=demo", nil)
+
+	Player().ServeHTTP(rec, req)
+
+	body := rec.Body.String()
+	if !strings.Contains(body, "dismissLabelingTip") {
+		t.Fatal("Player() body missing dismissLabelingTip — Escape cannot dismiss the tip")
+	}
+	// Both dismissLabelingTip and cancelBoundaryMark must be called in Escape handler.
+	if !strings.Contains(body, "didDismissTip") {
+		t.Fatal("Player() Escape handler should capture dismissLabelingTip result")
+	}
+}
+
+// TestPlayerHasMobileResponsiveGuidedState verifies AC8: CSS stacks CTAs
+// vertically at ≤640 px and renders tooltip as a block element.
+func TestPlayerHasMobileResponsiveGuidedState(t *testing.T) {
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/player?show=demo", nil)
+
+	Player().ServeHTTP(rec, req)
+
+	body := rec.Body.String()
+	wants := []string{
+		"chapterGuideCtas",
+		"labelingTip",
+		"flex-direction: column",
+		"@media (max-width: 640px)",
+	}
+	for _, want := range wants {
+		if !strings.Contains(body, want) {
+			t.Fatalf("Player() body does not contain %q for mobile responsive layout (AC8)", want)
+		}
+	}
+}
+
+// TestIndexIncludesEnhancedLibraryBadges verifies AC5: "No chapters" badge for
+// unlabeled shows, "✓ Labeled" for fully-handled shows, plus the existing
+// "N pending reviews" badge.
+func TestIndexIncludesEnhancedLibraryBadges(t *testing.T) {
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+
+	Index().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("Index() status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	body := rec.Body.String()
+	wants := []string{
+		"reviewBadge--neutral",
+		"reviewBadge--success",
+		"No chapters",
+		"✓ Labeled",
+		"boundaryCount",
+		"candidateCount",
+	}
+	for _, want := range wants {
+		if !strings.Contains(body, want) {
+			t.Fatalf("Index() body does not contain %q for enhanced library badges (AC5)", want)
+		}
+	}
+	// Existing pending-review badge must still be present.
+	if !strings.Contains(body, "reviewBadge") {
+		t.Fatal("Index() body missing reviewBadge class — existing badge regressed")
+	}
+}

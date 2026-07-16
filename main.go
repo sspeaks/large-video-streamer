@@ -105,6 +105,8 @@ type libraryShow struct {
 	Playlist       string `json:"playlist,omitempty"`
 	Status         string `json:"status,omitempty"`
 	PendingReviews int    `json:"pendingReviews"`
+	BoundaryCount  int    `json:"boundaryCount"`
+	CandidateCount int    `json:"candidateCount"`
 }
 
 func libraryShowsHandler(shows showLister, labelStore labels.LabelStore) http.Handler {
@@ -140,6 +142,8 @@ func loadLibraryShows(shows showLister, labelStore labels.LabelStore) ([]library
 			Playlist:       show.Playlist,
 			Status:         show.Status,
 			PendingReviews: labels.PendingReviewCount(labelDoc.Candidates),
+			BoundaryCount:  len(labelDoc.Boundaries),
+			CandidateCount: len(labelDoc.Candidates),
 		})
 	}
 	return items, nil
