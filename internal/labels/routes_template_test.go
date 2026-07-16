@@ -252,3 +252,31 @@ func TestLabelsPageIncludesHighConfidenceBulkApply(t *testing.T) {
 		}
 	}
 }
+
+func TestLabelsPageReconnectsToBackgroundAnalysis(t *testing.T) {
+	var buf bytes.Buffer
+	if err := labelsPageTemplate.Execute(&buf, struct{ Show string }{Show: "quartet_finals"}); err != nil {
+		t.Fatalf("execute labels page template: %v", err)
+	}
+	out := buf.String()
+
+	wants := []string{
+		"fetch(api + '/detect', { method: 'POST' })",
+		"fetch(api + '/autodetect', {",
+		"fetch(api + '/' + operation)",
+		"window.setTimeout(() => checkBackgroundStatus(operation), 3000)",
+		"Suggesting boundaries in the background",
+		"You can close this page; results will be saved for review.",
+		"await resumeBackgroundJobs()",
+		"await loadLabels()",
+	}
+	for _, want := range wants {
+		if !strings.Contains(out, want) {
+			t.Fatalf("labels page should contain %q to resume background analysis after reload", want)
+		}
+	}
+
+	if strings.Contains(out, "setDirty(true);\n        setStatus('Suggested ") {
+		t.Fatal("completed background analysis should load persisted candidates as saved state")
+	}
+}

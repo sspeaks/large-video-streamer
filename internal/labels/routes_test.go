@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sspeaks/large-video-streamer/internal/auth"
 	"github.com/sspeaks/large-video-streamer/internal/config"
@@ -77,7 +78,7 @@ func TestRoutesRejectUnsafeShowNames(t *testing.T) {
 	}
 }
 
-func TestRoutesAutodetectSavesCandidatesOnlyAndReturnsLabels(t *testing.T) {
+func TestRoutesAutodetectStartsBackgroundJobAndSavesCandidatesOnly(t *testing.T) {
 	videoDir := t.TempDir()
 	hlsDir := t.TempDir()
 	store := New(config.Config{VideoDir: videoDir, HLSDir: hlsDir, StateDir: t.TempDir()})
@@ -87,35 +88,36 @@ func TestRoutesAutodetectSavesCandidatesOnlyAndReturnsLabels(t *testing.T) {
 	signals := &fakeAutodetectSignals{
 		silences: []detect.Silence{{Time: 10, Duration: 2.5}, {Time: 20, Duration: 2}},
 	}
-	mux := authenticatedLabelServerMux(t, NewServer(store.cfg, store), signals)
+	srv := NewServer(store.cfg, store)
+	mux := authenticatedLabelServerMux(t, srv, signals)
 
 	res := serveLabelRequest(t, mux, http.MethodPost, "/labels/api/sample_video/autodetect", `{"lineup":[{"name":"quartet-a"}]}`)
-	if res.Code != http.StatusOK {
-		t.Fatalf("POST autodetect status = %d, want %d; body %q", res.Code, http.StatusOK, res.Body.String())
+	if res.Code != http.StatusAccepted {
+		t.Fatalf("POST autodetect status = %d, want %d; body %q", res.Code, http.StatusAccepted, res.Body.String())
+	}
+	status := waitForServerDetectionState(t, srv, "sample_video", detectionOperationAutodetect, detectionCompleted)
+	if status.CandidateCount != 2 {
+		t.Fatalf("candidate count = %d, want 2", status.CandidateCount)
 	}
 
-	var labels VideoLabels
-	if err := json.Unmarshal(res.Body.Bytes(), &labels); err != nil {
-		t.Fatalf("decode response: %v", err)
+	saved, err := store.Load("sample_video")
+	if err != nil {
+		t.Fatalf("Load saved labels: %v", err)
 	}
-	if labels.Video != "sample_video" || len(labels.Boundaries) != 1 || labels.Boundaries[0].Name != "existing" {
-		t.Fatalf("labels = %#v, want existing labels preserved", labels)
+	if saved.Video != "sample_video" || len(saved.Boundaries) != 1 || saved.Boundaries[0].Name != "existing" {
+		t.Fatalf("labels = %#v, want existing labels preserved", saved)
 	}
-	if len(labels.Candidates) != 2 {
-		t.Fatalf("len(Candidates) = %d, want 2: %#v", len(labels.Candidates), labels.Candidates)
+	if len(saved.Candidates) != 2 {
+		t.Fatalf("len(Candidates) = %d, want 2: %#v", len(saved.Candidates), saved.Candidates)
 	}
-	if labels.Candidates[0].SuggestedName != "quartet-a" || labels.Candidates[1].SuggestedName != "quartet-a-song-2" {
-		t.Fatalf("SuggestedName values = %#v, want lineup suggestions", labels.Candidates)
+	if saved.Candidates[0].SuggestedName != "quartet-a" || saved.Candidates[1].SuggestedName != "quartet-a-song-2" {
+		t.Fatalf("SuggestedName values = %#v, want lineup suggestions", saved.Candidates)
 	}
 	if got, want := signals.silencePath, filepath.Join(videoDir, "sample_video.mkv"); got != want {
 		t.Fatalf("silence path = %q, want %q", got, want)
 	}
 	if _, err := os.Stat(filepath.Join(hlsDir, "sample_video", "chapters.vtt")); !os.IsNotExist(err) {
 		t.Fatalf("chapters.vtt exists after autodetect or stat failed: %v", err)
-	}
-	saved, err := store.Load("sample_video")
-	if err != nil {
-		t.Fatalf("Load saved labels: %v", err)
 	}
 	if len(saved.Candidates) != 2 || saved.Candidates[0].SuggestedName != "quartet-a" {
 		t.Fatalf("saved candidates = %#v, want autodetect candidates persisted", saved.Candidates)
@@ -141,12 +143,14 @@ func TestRoutesAutodetectDoesNotRewriteExistingChaptersVTT(t *testing.T) {
 	signals := &fakeAutodetectSignals{
 		silences: []detect.Silence{{Time: 10, Duration: 2.5}},
 	}
-	mux := authenticatedLabelServerMux(t, NewServer(store.cfg, store), signals)
+	srv := NewServer(store.cfg, store)
+	mux := authenticatedLabelServerMux(t, srv, signals)
 
 	res := serveLabelRequest(t, mux, http.MethodPost, "/labels/api/sample_video/autodetect", `{"lineup":[{"name":"quartet-a"}]}`)
-	if res.Code != http.StatusOK {
-		t.Fatalf("POST autodetect status = %d, want %d; body %q", res.Code, http.StatusOK, res.Body.String())
+	if res.Code != http.StatusAccepted {
+		t.Fatalf("POST autodetect status = %d, want %d; body %q", res.Code, http.StatusAccepted, res.Body.String())
 	}
+	waitForServerDetectionState(t, srv, "sample_video", detectionOperationAutodetect, detectionCompleted)
 
 	chapters, err := os.ReadFile(chaptersPath)
 	if err != nil {
@@ -177,27 +181,29 @@ func TestRoutesAutodetectPersistsBlackFreezeCandidatesOnly(t *testing.T) {
 		blackSegments:  []detect.BlackSegment{{Start: 12, End: 13, Duration: 1}},
 		freezeSegments: []detect.FreezeSegment{{Start: 39, End: 42, Duration: 3}},
 	}
-	mux := authenticatedLabelServerMux(t, NewServer(store.cfg, store), signals)
+	srv := NewServer(store.cfg, store)
+	mux := authenticatedLabelServerMux(t, srv, signals)
 
 	res := serveLabelRequest(t, mux, http.MethodPost, "/labels/api/sample_video/autodetect", `{"lineup":[{"name":"quartet-a","songCount":2}],"useSilence":false,"useColor":true}`)
-	if res.Code != http.StatusOK {
-		t.Fatalf("POST autodetect status = %d, want %d; body %q", res.Code, http.StatusOK, res.Body.String())
+	if res.Code != http.StatusAccepted {
+		t.Fatalf("POST autodetect status = %d, want %d; body %q", res.Code, http.StatusAccepted, res.Body.String())
 	}
+	waitForServerDetectionState(t, srv, "sample_video", detectionOperationAutodetect, detectionCompleted)
 
-	var labels VideoLabels
-	if err := json.Unmarshal(res.Body.Bytes(), &labels); err != nil {
-		t.Fatalf("decode response: %v", err)
+	saved, err := store.Load("sample_video")
+	if err != nil {
+		t.Fatalf("Load saved labels: %v", err)
 	}
-	if len(labels.Boundaries) != 1 || labels.Boundaries[0].Name != "existing" {
-		t.Fatalf("boundaries = %#v, want existing boundary only", labels.Boundaries)
+	if len(saved.Boundaries) != 1 || saved.Boundaries[0].Name != "existing" {
+		t.Fatalf("boundaries = %#v, want existing boundary only", saved.Boundaries)
 	}
-	if len(labels.Candidates) != 2 {
-		t.Fatalf("candidates = %#v, want black and freeze candidates", labels.Candidates)
+	if len(saved.Candidates) != 2 {
+		t.Fatalf("candidates = %#v, want black and freeze candidates", saved.Candidates)
 	}
-	if !candidateHasSource(labels.Candidates, autodetectSourceBlack) || !candidateHasSource(labels.Candidates, autodetectSourceFreeze) {
-		t.Fatalf("candidates = %#v, want black and freeze source metadata", labels.Candidates)
+	if !candidateHasSource(saved.Candidates, autodetectSourceBlack) || !candidateHasSource(saved.Candidates, autodetectSourceFreeze) {
+		t.Fatalf("candidates = %#v, want black and freeze source metadata", saved.Candidates)
 	}
-	for _, candidate := range labels.Candidates {
+	for _, candidate := range saved.Candidates {
 		if candidate.Status != "candidate" {
 			t.Fatalf("candidate = %#v, want status candidate until a reviewer promotes it", candidate)
 		}
@@ -208,10 +214,6 @@ func TestRoutesAutodetectPersistsBlackFreezeCandidatesOnly(t *testing.T) {
 	}
 	if string(chapters) != sentinel {
 		t.Fatalf("chapters.vtt = %q, want existing sentinel unchanged because autodetect only saves candidates", chapters)
-	}
-	saved, err := store.Load("sample_video")
-	if err != nil {
-		t.Fatalf("Load saved labels: %v", err)
 	}
 	if len(saved.Boundaries) != 1 || len(saved.Candidates) != 2 || !candidateHasSource(saved.Candidates, autodetectSourceBlack) || !candidateHasSource(saved.Candidates, autodetectSourceFreeze) {
 		t.Fatalf("saved labels = %#v, want boundary unchanged and black/freeze candidates persisted", saved)
@@ -238,14 +240,16 @@ func TestRoutesAutodetectSurfacesRequestedOCRErrors(t *testing.T) {
 		silences: []detect.Silence{{Time: 10, Duration: 2}},
 		ocrErr:   errors.New("tesseract not found in PATH"),
 	}
-	mux := authenticatedLabelServerMux(t, NewServer(store.cfg, store), signals)
+	srv := NewServer(store.cfg, store)
+	mux := authenticatedLabelServerMux(t, srv, signals)
 
 	res := serveLabelRequest(t, mux, http.MethodPost, "/labels/api/sample_video/autodetect", `{"lineup":[{"name":"quartet-a"}],"useOCR":true}`)
-	if res.Code != http.StatusInternalServerError {
-		t.Fatalf("POST autodetect status = %d, want %d; body %q", res.Code, http.StatusInternalServerError, res.Body.String())
+	if res.Code != http.StatusAccepted {
+		t.Fatalf("POST autodetect status = %d, want %d; body %q", res.Code, http.StatusAccepted, res.Body.String())
 	}
-	if !strings.Contains(res.Body.String(), "tesseract not found") {
-		t.Fatalf("body = %q, want OCR error", res.Body.String())
+	status := waitForServerDetectionState(t, srv, "sample_video", detectionOperationAutodetect, detectionFailed)
+	if !strings.Contains(status.Error, "tesseract not found") {
+		t.Fatalf("autodetect error = %q, want OCR error", status.Error)
 	}
 }
 
@@ -347,6 +351,24 @@ func candidateHasSource(candidates []Candidate, source string) bool {
 		}
 	}
 	return false
+}
+
+func waitForServerDetectionState(t *testing.T, srv *Server, show string, operation detectionOperation, want string) detectionStatus {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		status := srv.detections.status(show, operation)
+		if status.State == want {
+			return status
+		}
+		if status.State == detectionFailed && want != detectionFailed {
+			t.Fatalf("%s failed while waiting for %q: %s", operation, want, status.Error)
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%s state = %q, want %q", operation, status.State, want)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 func authenticatedLabelMux(t *testing.T, store *Store) *http.ServeMux {

@@ -2,6 +2,7 @@ package labels
 
 import (
 	"io"
+	"sync"
 
 	"github.com/sspeaks/large-video-streamer/internal/config"
 )
@@ -50,6 +51,8 @@ type Server struct {
 	cfg               config.Config
 	store             LabelStore
 	autodetectSignals autodetectSignals
+	mutationMu        sync.Mutex
+	detections        *detectionManager
 }
 
 // New returns the flat-file label store rooted in the configured state directory.
@@ -63,7 +66,13 @@ func NewServer(cfg config.Config, store LabelStore) *Server {
 	if store == nil {
 		store = New(cfg)
 	}
-	return &Server{cfg: cfg, store: store, autodetectSignals: detectAutodetectSignals{}}
+	srv := &Server{
+		cfg:               cfg,
+		store:             store,
+		autodetectSignals: detectAutodetectSignals{},
+	}
+	srv.detections = newDetectionManager(srv, cfg, store, &srv.mutationMu)
+	return srv
 }
 
 // Load reads labels for video.

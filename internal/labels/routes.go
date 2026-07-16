@@ -13,7 +13,6 @@ import (
 	"strings"
 
 	"github.com/sspeaks/large-video-streamer/internal/auth"
-	"github.com/sspeaks/large-video-streamer/internal/detect"
 )
 
 var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doctype html>
@@ -207,6 +206,8 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
     let busy = false;
     let busyOperation = '';
     let currentKey = null;
+    let backgroundPollTimer = null;
+    let backgroundOperation = '';
     const selectedCandidates = new Set();
     const statusEl = document.getElementById('status');
     const statusActions = document.getElementById('status-actions');
@@ -608,37 +609,126 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
       scrollRowIntoView(currentRow);
       setBusy(busy);
     };
+    const loadLabels = async () => {
+      const res = await fetch(api);
+      if (!res.ok) throw new Error(await res.text());
+      labels = await res.json();
+      normalizeLabels();
+      selectedCandidates.clear();
+      render();
+      setDirty(false);
+    };
+    const clearBackgroundPoll = () => {
+      if (backgroundPollTimer !== null) {
+        window.clearTimeout(backgroundPollTimer);
+        backgroundPollTimer = null;
+      }
+    };
+    const scheduleBackgroundPoll = (operation) => {
+      clearBackgroundPoll();
+      backgroundPollTimer = window.setTimeout(() => checkBackgroundStatus(operation), 3000);
+    };
+    const applyBackgroundStatus = async (operation, job) => {
+      const state = job && job.state ? job.state : 'idle';
+      if (state === 'running') {
+        backgroundOperation = operation;
+        setBusy(true, operation);
+        const message = operation === 'autodetect'
+          ? 'Suggesting boundaries in the background… You can close this page; results will be saved for review.'
+          : 'Detecting silences in the background… You can close this page; results will be saved for review.';
+        setStatus(message);
+        scheduleBackgroundPoll(operation);
+        return;
+      }
+
+      if (backgroundOperation === operation) {
+        backgroundOperation = '';
+        clearBackgroundPoll();
+        setBusy(false);
+      }
+      if (state === 'completed') {
+        await loadLabels();
+        const count = Number(job.candidateCount) || 0;
+        const verb = operation === 'autodetect' ? 'Suggested' : 'Detected';
+        setStatus(verb + ' ' + count + ' pending candidate boundary(ies) and saved them for review.');
+      } else if (state === 'failed') {
+        const prefix = operation === 'autodetect' ? 'Suggest boundaries failed: ' : 'Detect failed: ';
+        setStatus(prefix + (job.error || 'unknown error'));
+      }
+    };
+    const fetchBackgroundStatus = async (operation) => {
+      const res = await fetch(api + '/' + operation);
+      if (!res.ok) throw new Error(await res.text());
+      return await res.json();
+    };
+    const checkBackgroundStatus = async (operation) => {
+      try {
+        await applyBackgroundStatus(operation, await fetchBackgroundStatus(operation));
+      } catch (err) {
+        if (backgroundOperation === operation) {
+          setStatus('Background analysis is still running, but its status is temporarily unavailable. Retrying…');
+          scheduleBackgroundPoll(operation);
+        } else {
+          setBusy(false);
+          setStatus('Could not check background analysis status: ' + err.message);
+        }
+      }
+    };
+    const resumeBackgroundJobs = async () => {
+      const operations = ['autodetect', 'detect'];
+      const statuses = await Promise.all(operations.map(async (operation) => {
+        try {
+          return { operation: operation, job: await fetchBackgroundStatus(operation) };
+        } catch (_) {
+          return null;
+        }
+      }));
+      const available = statuses.filter(Boolean);
+      const running = available.find((item) => item.job && item.job.state === 'running');
+      if (running) {
+        await applyBackgroundStatus(running.operation, running.job);
+        return;
+      }
+      const finished = available.filter((item) => item.job && (item.job.state === 'completed' || item.job.state === 'failed')).sort((a, b) => String(b.job.finishedAt || '').localeCompare(String(a.job.finishedAt || '')));
+      if (finished.length > 0) {
+        await applyBackgroundStatus(finished[0].operation, finished[0].job);
+      }
+    };
     const runDetect = async () => {
       if (busy) return;
+      if (dirty) {
+        setStatus('Save your current label changes before starting detection.');
+        return;
+      }
+      backgroundOperation = 'detect';
       setBusy(true, 'detect');
-      setStatus('Detecting silences (analyzing audio)…');
+      setStatus('Starting background silence detection…');
       try {
         const res = await fetch(api + '/detect', { method: 'POST' });
         if (!res.ok) throw new Error(await res.text());
-        labels = await res.json();
-        normalizeLabels();
-        selectedCandidates.clear();
-        render();
-        const n = labels.candidates.filter(c => candidateStatus(c) === 'candidate').length;
-        setDirty(true);
-        setStatus('Detected ' + n + ' pending candidate boundary(ies) — promote or reject each, then Save.');
+        await applyBackgroundStatus('detect', await res.json());
       } catch (err) {
-        setStatus('Detect failed: ' + err.message);
-      } finally {
+        backgroundOperation = '';
         setBusy(false);
+        setStatus('Detect failed: ' + err.message);
       }
     };
     const parseAutodetectLineup = () => autodetectLineup.value.split(/\r?\n/).map((name) => name.trim()).filter(Boolean).map((name) => ({ name: name }));
     const runAutodetect = async () => {
       if (busy) return;
+      if (dirty) {
+        setStatus('Save your current label changes before suggesting boundaries.');
+        return;
+      }
       const lineup = parseAutodetectLineup();
       if (lineup.length === 0) {
         setStatus('Enter at least one quartet name before suggesting boundaries.');
         autodetectLineup.focus();
         return;
       }
+      backgroundOperation = 'autodetect';
       setBusy(true, 'autodetect');
-      setStatus('Suggesting boundary candidates from selected signals…');
+      setStatus('Starting background boundary suggestions…');
       try {
         const res = await fetch(api + '/autodetect', {
           method: 'POST',
@@ -651,17 +741,11 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
           }),
         });
         if (!res.ok) throw new Error(await res.text());
-        labels = await res.json();
-        normalizeLabels();
-        selectedCandidates.clear();
-        render();
-        const n = labels.candidates.filter(c => candidateStatus(c) === 'candidate').length;
-        setDirty(true);
-        setStatus('Suggested ' + n + ' pending candidate boundary(ies) — review, promote or reject, then Save.');
+        await applyBackgroundStatus('autodetect', await res.json());
       } catch (err) {
-        setStatus('Suggest boundaries failed: ' + err.message);
-      } finally {
+        backgroundOperation = '';
         setBusy(false);
+        setStatus('Suggest boundaries failed: ' + err.message);
       }
     };
     document.getElementById('add-boundary').addEventListener('click', () => {
@@ -784,13 +868,12 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
     });
     (async () => {
       try {
-        const res = await fetch(api);
-        if (!res.ok) throw new Error(await res.text());
-        labels = await res.json();
-        normalizeLabels();
-        render();
-        setDirty(false);
-      } catch (err) { setStatus(err.message); }
+        await loadLabels();
+      } catch (err) {
+        setStatus(err.message);
+        return;
+      }
+      await resumeBackgroundJobs();
     })();
   </script>
 </body>
@@ -810,7 +893,9 @@ func (srv *Server) RegisterRoutes(mux *http.ServeMux, a *auth.Authenticator) {
 	mux.Handle("GET /labels/api/{show}/export", a.RequireMedia(http.HandlerFunc(srv.handleLabelsExport)))
 	mux.Handle("POST /labels/api/{show}/mkv/import", a.RequireMedia(http.HandlerFunc(srv.handleMKVImport)))
 	mux.Handle("POST /labels/api/{show}/mkv/embed", a.RequireMedia(http.HandlerFunc(srv.handleMKVEmbed)))
+	mux.Handle("GET /labels/api/{show}/detect", a.RequireMedia(http.HandlerFunc(srv.handleDetectStatus)))
 	mux.Handle("POST /labels/api/{show}/detect", a.RequireMedia(http.HandlerFunc(srv.handleDetect)))
+	mux.Handle("GET /labels/api/{show}/autodetect", a.RequireMedia(http.HandlerFunc(srv.handleAutodetectStatus)))
 	mux.Handle("POST /labels/api/{show}/autodetect", a.RequireMedia(http.HandlerFunc(srv.handleAutodetect)))
 }
 
@@ -835,6 +920,7 @@ func (srv *Server) handleLabelsGet(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, labels)
 }
 
@@ -854,6 +940,8 @@ func (srv *Server) handleLabelsPost(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	srv.mutationMu.Lock()
+	defer srv.mutationMu.Unlock()
 	if err := srv.saveAndWriteChapters(labels); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -877,6 +965,8 @@ func (srv *Server) handleLabelsImport(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	srv.mutationMu.Lock()
+	defer srv.mutationMu.Unlock()
 	if err := srv.saveAndWriteChapters(labels); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -903,6 +993,9 @@ func (srv *Server) handleMKVImport(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	srv.mutationMu.Lock()
+	defer srv.mutationMu.Unlock()
+
 	labels, err := srv.store.Load(show)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -939,39 +1032,38 @@ func (srv *Server) handleMKVEmbed(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// handleDetect runs ffmpeg silencedetect over the source .mkv and merges the
-// resulting candidate boundaries into the show's labels. It preserves any
-// existing user decisions (candidates already promoted/rejected) and only adds
-// newly detected times that don't coincide with a kept candidate. Candidates do
-// not affect chapters.vtt until promoted to boundaries, so we only Save here.
+func (srv *Server) handleDetectStatus(w http.ResponseWriter, r *http.Request) {
+	show, ok := validShowFromRequest(w, r)
+	if !ok {
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, srv.detections.status(show, detectionOperationSilence))
+}
+
+func (srv *Server) handleAutodetectStatus(w http.ResponseWriter, r *http.Request) {
+	show, ok := validShowFromRequest(w, r)
+	if !ok {
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, srv.detections.status(show, detectionOperationAutodetect))
+}
+
+// handleDetect starts server-owned silence detection and returns immediately.
+// The background job persists candidates when it completes, independent of the
+// browser request that started it.
 func (srv *Server) handleDetect(w http.ResponseWriter, r *http.Request) {
 	show, ok := validShowFromRequest(w, r)
 	if !ok {
 		return
 	}
-	labels, err := srv.store.Load(show)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	silences, err := detect.DetectSilence(filepath.Join(srv.cfg.VideoDir, show+".mkv"), detect.DefaultNoiseDB, detect.DefaultMinDur)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	detected := make([]Candidate, 0, len(silences))
-	for _, sil := range silences {
-		detected = append(detected, Candidate{Time: sil.Time, Duration: sil.Duration, Status: "candidate"})
-	}
-	labels.Candidates = mergeCandidatesWithBoundaries(labels.Candidates, detected, labels.Boundaries)
-	labels.Video = show
-	if err := srv.store.Save(labels); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	writeJSON(w, http.StatusOK, labels)
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusAccepted, srv.detections.startSilence(show))
 }
 
+// handleAutodetect validates the requested signals and starts a server-owned
+// background job whose candidates are persisted independently of the page.
 func (srv *Server) handleAutodetect(w http.ResponseWriter, r *http.Request) {
 	show, ok := validShowFromRequest(w, r)
 	if !ok {
@@ -983,23 +1075,8 @@ func (srv *Server) handleAutodetect(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	labels, err := srv.store.Load(show)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	detected, err := srv.buildAutodetectCandidates(filepath.Join(srv.cfg.VideoDir, show+".mkv"), req)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	labels.Candidates = mergeCandidatesWithBoundaries(labels.Candidates, detected, labels.Boundaries)
-	labels.Video = show
-	if err := srv.store.Save(labels); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	writeJSON(w, http.StatusOK, labels)
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusAccepted, srv.detections.startAutodetect(show, req))
 }
 
 // mergeCandidates keeps candidates the user has already decided on
