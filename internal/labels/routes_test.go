@@ -356,6 +356,88 @@ func assertHasBoundary(t *testing.T, labels VideoLabels, want Boundary) {
 	t.Fatalf("Boundaries = %#v, want to contain %#v", labels.Boundaries, want)
 }
 
+func TestRoutesImportPreservesPersistedLineupFlatFile(t *testing.T) {
+	cfg := config.Config{VideoDir: t.TempDir(), HLSDir: t.TempDir(), StateDir: t.TempDir()}
+	store := New(cfg)
+	if err := store.Save(VideoLabels{
+		Video:  "demo",
+		Lineup: []string{"group-01", "group-02"},
+	}); err != nil {
+		t.Fatalf("Save fixture: %v", err)
+	}
+	mux := authenticatedLabelMux(t, store)
+
+	res := serveLabelRequest(t, mux, http.MethodPost, "/labels/api/demo/import", "chapter-a 00:01:00\nchapter-b 00:02:00\n")
+	if res.Code != http.StatusOK {
+		t.Fatalf("POST import status = %d, want %d; body %q", res.Code, http.StatusOK, res.Body.String())
+	}
+	var importedLabels VideoLabels
+	if err := json.Unmarshal(res.Body.Bytes(), &importedLabels); err != nil {
+		t.Fatalf("decode import response: %v", err)
+	}
+	if len(importedLabels.Lineup) != 2 || importedLabels.Lineup[0] != "group-01" || importedLabels.Lineup[1] != "group-02" {
+		t.Fatalf("import response Lineup = %v, want [group-01 group-02]", importedLabels.Lineup)
+	}
+
+	// Simulate a reload: fresh GET without any additional save.
+	res = serveLabelRequest(t, mux, http.MethodGet, "/labels/api/demo", "")
+	if res.Code != http.StatusOK {
+		t.Fatalf("GET labels status = %d, want %d; body %q", res.Code, http.StatusOK, res.Body.String())
+	}
+	var reloadedLabels VideoLabels
+	if err := json.Unmarshal(res.Body.Bytes(), &reloadedLabels); err != nil {
+		t.Fatalf("decode reload response: %v", err)
+	}
+	if len(reloadedLabels.Lineup) != 2 || reloadedLabels.Lineup[0] != "group-01" || reloadedLabels.Lineup[1] != "group-02" {
+		t.Fatalf("reloaded Lineup = %v, want [group-01 group-02] — lineup was erased by import", reloadedLabels.Lineup)
+	}
+	if len(reloadedLabels.Boundaries) != 2 {
+		t.Fatalf("reloaded Boundaries = %v, want 2 boundaries from import", reloadedLabels.Boundaries)
+	}
+}
+
+func TestRoutesImportWithNoExistingLineupPersistsNilLineup(t *testing.T) {
+	cfg := config.Config{VideoDir: t.TempDir(), HLSDir: t.TempDir(), StateDir: t.TempDir()}
+	store := New(cfg)
+	mux := authenticatedLabelMux(t, store)
+
+	res := serveLabelRequest(t, mux, http.MethodPost, "/labels/api/demo/import", "chapter-a 00:01:00\n")
+	if res.Code != http.StatusOK {
+		t.Fatalf("POST import status = %d, want %d; body %q", res.Code, http.StatusOK, res.Body.String())
+	}
+	reloaded, err := store.Load("demo")
+	if err != nil {
+		t.Fatalf("Load after import: %v", err)
+	}
+	if len(reloaded.Lineup) != 0 {
+		t.Fatalf("Lineup with no prior lineup = %v, want empty", reloaded.Lineup)
+	}
+}
+
+func TestSafeHTTPErrorLabelsImportLoadFailure(t *testing.T) {
+	videoDir := t.TempDir()
+	sentinel := videoDir
+	store := &errLabelStore{loadErr: errors.New("disk error at " + sentinel)}
+	srv := NewServer(config.Config{VideoDir: videoDir, StateDir: t.TempDir(), HLSDir: t.TempDir()}, store)
+	mux, logs := serverWithTestLogger(t, srv)
+
+	res := serveLabelRequest(t, mux, http.MethodPost, "/labels/api/demo/import", "chapter-a 00:01:00\n")
+
+	if res.Code != http.StatusInternalServerError {
+		t.Fatalf("POST import (load failure) status = %d, want %d", res.Code, http.StatusInternalServerError)
+	}
+	got := strings.TrimSpace(res.Body.String())
+	if got != errPublicLoadFailed {
+		t.Fatalf("body = %q, want %q", got, errPublicLoadFailed)
+	}
+	if strings.Contains(got, sentinel) {
+		t.Fatalf("response body exposes sentinel path %q", sentinel)
+	}
+	if logs.Len() == 0 {
+		t.Fatal("expected server-side log entry; got none")
+	}
+}
+
 func candidateHasSource(candidates []Candidate, source string) bool {
 	for _, candidate := range candidates {
 		for _, got := range candidate.Sources {

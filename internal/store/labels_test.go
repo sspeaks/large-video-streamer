@@ -288,6 +288,47 @@ func TestLabelStoreSaveLoadRoundTripWithLineupAndOtherFields(t *testing.T) {
 	}
 }
 
+func TestLabelStoreImportMergePatternPreservesLineupSQLite(t *testing.T) {
+	// Tests the exact load-merge-save pattern used by handleLabelsImport,
+	// proving that the SQLite store correctly persists the lineup after a
+	// timestamp import (reload without extra save must find lineup intact).
+	_, db, store := newTestLabelStore(t)
+	defer db.Close()
+
+	if err := store.Save(labels.VideoLabels{
+		Video:  "demo",
+		Lineup: []string{"group-01", "group-02"},
+	}); err != nil {
+		t.Fatalf("Save initial state: %v", err)
+	}
+
+	// Simulate handleLabelsImport: load existing, copy lineup, save imported.
+	existing, err := store.Load("demo")
+	if err != nil {
+		t.Fatalf("Load existing: %v", err)
+	}
+	imported := labels.VideoLabels{
+		Video:      "demo",
+		Boundaries: []labels.Boundary{{Name: "chapter-a", Start: 60}},
+		Lineup:     existing.Lineup,
+	}
+	if err := store.Save(imported); err != nil {
+		t.Fatalf("Save imported: %v", err)
+	}
+
+	// Fresh load (simulates reload/tab-close without extra save).
+	reloaded, err := store.Load("demo")
+	if err != nil {
+		t.Fatalf("Load after import: %v", err)
+	}
+	if len(reloaded.Lineup) != 2 || reloaded.Lineup[0] != "group-01" || reloaded.Lineup[1] != "group-02" {
+		t.Fatalf("reloaded Lineup = %v, want [group-01 group-02]", reloaded.Lineup)
+	}
+	if len(reloaded.Boundaries) != 1 || reloaded.Boundaries[0].Name != "chapter-a" {
+		t.Fatalf("reloaded Boundaries = %v, want [{chapter-a 60}]", reloaded.Boundaries)
+	}
+}
+
 func newTestLabelStore(t *testing.T) (context.Context, *sql.DB, *SQLiteLabelStore) {
 	t.Helper()
 	ctx := context.Background()
