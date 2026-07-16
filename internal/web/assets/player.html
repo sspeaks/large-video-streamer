@@ -66,7 +66,11 @@
     .chapterState strong { display: block; color: var(--text); }
     .chapterState p { max-width: 400px; margin: 3px 0 0; font-size: .9rem; }
     .chapterState .btn { margin-top: 14px; }
+    .chapterGuideCtas { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
     .chapterState.error strong, .chapterState.error p { color: var(--error-text); }
+    .labelingTip { display: flex; align-items: flex-start; gap: 12px; flex-wrap: wrap; padding: 12px 14px; border: 1px solid var(--accent); border-radius: var(--radius); background: var(--surface-input); color: var(--text); font-size: .92rem; }
+    .labelingTip p { flex: 1 1 200px; margin: 0; line-height: 1.5; }
+    .labelingTip .btn { flex: 0 0 auto; min-height: 36px; padding: 6px 14px; border-radius: var(--radius-pill); }
     .editorPanel { background: linear-gradient(180deg, var(--surface), var(--bg-deep)); }
     .editorPanel .panelHeader { margin-bottom: 18px; }
     .hint { margin: 0 0 12px; color: var(--text-muted); font-size: .9rem; line-height: 1.55; }
@@ -117,6 +121,12 @@
       #markBtn { width: 100%; }
       .playbackRow { flex-wrap: wrap; }
     }
+    @media (max-width: 640px) {
+      .chapterGuideCtas { flex-direction: column; }
+      .chapterGuideCtas .btn { width: 100%; }
+      .labelingTip { flex-direction: column; }
+      .labelingTip .btn { width: 100%; }
+    }
   </style>
 </head>
 <body>
@@ -161,6 +171,10 @@
             </button>
           </div>
           <div id="markStatus" class="markStatus" role="status" aria-live="polite" hidden></div>
+          <div id="labelingTip" class="labelingTip" role="tooltip" aria-live="polite" hidden>
+            <p>💡 <strong>Tip:</strong> Pause where a performance starts, then click <strong>＋ Add chapter</strong> to mark it as a chapter.</p>
+            <button id="labelingTipDismiss" type="button" class="btn btn--secondary">Got it</button>
+          </div>
         </div>
       </section>
 
@@ -246,6 +260,7 @@
     let hlsPlayer = null;
     let currentPlaylistURL = '';
     let pendingBoundaryStart = null; // seconds snapshotted at hotkey press; null when idle
+    let lastCandidatesEmpty = true; // tracks whether the last chapter load found zero candidates
     video.setAttribute('aria-label', displayName(show));
 
     if (!show) {
@@ -267,7 +282,7 @@
       // live native markers are built from the fetched label boundaries below.
       void chaptersURL;
       loadVideo(playlistURL);
-      loadChapters();
+      loadChapters().then(() => initLabelingTip());
     }
 
     retryPlaybackEl.addEventListener('click', () => {
@@ -577,6 +592,7 @@
           throw new Error(await responseError(response, 'Could not load chapters.'));
         }
         const data = await response.json();
+        lastCandidatesEmpty = ((data && data.candidates) || []).length === 0;
         chapterCues = boundariesToCues((data && data.boundaries) || []);
         renderChapters(chapterCues);
         rebuildNativeChapterTrack(chapterCues);
@@ -659,18 +675,89 @@
         .join(' ') || 'Video Player';
     }
 
+    // Guided empty state (AC1): shown when no boundaries AND no candidates exist.
+    function renderGuidedEmptyState() {
+      chaptersEl.textContent = '';
+      const state = document.createElement('div');
+      state.className = 'chapterState';
+      const copy = document.createElement('div');
+      const heading = document.createElement('strong');
+      heading.textContent = 'No chapters yet';
+      const description = document.createElement('p');
+      description.textContent = 'Chapters mark where each quartet starts. Add them while watching, or let auto-detect find likely starting points.';
+      copy.append(heading, description);
+      const ctas = document.createElement('div');
+      ctas.className = 'chapterGuideCtas';
+      const addBtn = document.createElement('button');
+      addBtn.type = 'button';
+      addBtn.className = 'btn btn--primary';
+      addBtn.textContent = '▶ Add your first chapter';
+      addBtn.addEventListener('click', openChapterEditor);
+      const detectLink = document.createElement('a');
+      detectLink.className = 'btn btn--secondary';
+      detectLink.href = '/labels/' + showPath;
+      detectLink.textContent = '⚡ Auto-detect';
+      detectLink.setAttribute('aria-label', 'Auto-detect — open full label editor');
+      ctas.append(addBtn, detectLink);
+      copy.append(ctas);
+      state.append(copy);
+      chaptersEl.append(state);
+    }
+
+    // Tooltip (AC4): shown on first visit; persists until dismissed.
+    function initLabelingTip() {
+      if (!show) return;
+      const tipEl = document.getElementById('labelingTip');
+      if (!tipEl) return;
+      let dismissed = false;
+      try { dismissed = Boolean(localStorage.getItem('labeling-tip-dismissed')); } catch (_) { return; }
+      if (dismissed) return;
+      showLabelingTip();
+    }
+
+    function showLabelingTip() {
+      const tipEl = document.getElementById('labelingTip');
+      if (!tipEl) return;
+      const addChapterEl = document.getElementById('addChapterToggle');
+      tipEl.hidden = false;
+      if (addChapterEl) addChapterEl.setAttribute('aria-describedby', 'labelingTip');
+      setTimeout(() => document.addEventListener('click', handleTipClickOutside), 0);
+    }
+
+    function dismissLabelingTip() {
+      const tipEl = document.getElementById('labelingTip');
+      if (!tipEl || tipEl.hidden) return false;
+      tipEl.hidden = true;
+      const addChapterEl = document.getElementById('addChapterToggle');
+      if (addChapterEl) addChapterEl.removeAttribute('aria-describedby');
+      try { localStorage.setItem('labeling-tip-dismissed', '1'); } catch (_) {}
+      document.removeEventListener('click', handleTipClickOutside);
+      return true;
+    }
+
+    function handleTipClickOutside(event) {
+      const tipEl = document.getElementById('labelingTip');
+      if (!tipEl || tipEl.hidden) { document.removeEventListener('click', handleTipClickOutside); return; }
+      const addChapterEl = document.getElementById('addChapterToggle');
+      if (!tipEl.contains(event.target) && event.target !== addChapterEl) dismissLabelingTip();
+    }
+
     function renderChapters(cues) {
       chaptersEl.textContent = '';
       chapterCountEl.textContent = cues.length + ' chapter' + (cues.length === 1 ? '' : 's');
       if (cues.length === 0) {
-        renderChapterState(
-          'No chapters yet',
-          'Add the first chapter to make this video easier to navigate and share.',
-          false,
-          'Add first chapter',
-          openChapterEditor,
-          false
-        );
+        if (lastCandidatesEmpty) {
+          renderGuidedEmptyState();
+        } else {
+          renderChapterState(
+            'No chapters yet',
+            'Add the first chapter to make this video easier to navigate and share.',
+            false,
+            'Add first chapter',
+            openChapterEditor,
+            false
+          );
+        }
         return;
       }
       for (const cue of cues) {
@@ -980,6 +1067,7 @@
     });
 
     document.getElementById('shortcutsToggle').addEventListener('click', openShortcutsHelp);
+    document.getElementById('labelingTipDismiss').addEventListener('click', () => dismissLabelingTip());
 
     document.addEventListener('keydown', event => {
       if (event.defaultPrevented) return;
@@ -991,8 +1079,11 @@
         return;
       }
       // Esc backs out an in-progress mark even if the name field lost focus.
+      // Also dismisses the first-visit labeling tip (AC4).
       if (event.key === 'Escape') {
-        if (cancelBoundaryMark()) event.preventDefault();
+        const didDismissTip = dismissLabelingTip();
+        const didCancelMark = cancelBoundaryMark();
+        if (didDismissTip || didCancelMark) event.preventDefault();
         return;
       }
       if (event.ctrlKey || event.altKey || event.metaKey) return;

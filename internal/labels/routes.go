@@ -80,6 +80,9 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
     .field-label { display: block; margin-bottom: .4rem; font-weight: 700; }
     .grid { display: grid; gap: 1rem; grid-template-columns: minmax(0, 1fr); }
     .empty-state { padding: 1rem; color: var(--text-muted); text-align: center; }
+    .onboarding-panel { margin-bottom: 1rem; padding: 1rem 1.25rem; border: 1px solid var(--accent); border-radius: var(--radius); background: var(--surface-input); }
+    .onboarding-panel h3 { margin: 0 0 .5rem; font-size: 1rem; }
+    .onboarding-panel p { margin: 0; color: var(--text-muted); font-size: .92rem; }
     tr.candidate-conflict > td { box-shadow: inset 3px 0 0 var(--danger); }
     tr.candidate-low-confidence > td { box-shadow: inset 3px 0 0 #facc15; }
     tr.candidate-conflict.candidate-low-confidence > td { box-shadow: inset 3px 0 0 var(--danger), inset 6px 0 0 #facc15; }
@@ -121,6 +124,10 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
       <button id="add-boundary" class="secondary mutating-control">Add boundary</button>
       <button id="save" class="primary mutating-control">Save</button>
     </div>
+    <div id="onboarding-panel" class="onboarding-panel" hidden aria-live="polite">
+      <h3>🎵 No labels yet</h3>
+      <p>Get started by entering performer names in the <strong>Lineup for auto-detection</strong> field below and clicking <strong>Auto-detect boundaries</strong>. Or add boundaries manually using <strong>Add boundary</strong> above.</p>
+    </div>
     <details class="help" id="shortcuts-help">
       <summary>Keyboard shortcuts</summary>
       <ul>
@@ -156,7 +163,7 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
         <div class="autodetect-panel" aria-label="Auto-detect setup">
           <label class="field-label" for="autodetect-lineup">Lineup for auto-detection</label>
           <p class="help" id="autodetect-lineup-help">Enter one quartet name per non-empty line. Auto-detection uses the lineup to prefill candidate names, but every result still needs review.</p>
-          <textarea id="autodetect-lineup" name="autodetect-lineup" class="editable-control" autocomplete="off" data-lpignore="true" aria-describedby="autodetect-lineup-help" placeholder="Quartet A&#10;Quartet B"></textarea>
+          <textarea id="autodetect-lineup" name="autodetect-lineup" class="editable-control" autocomplete="off" data-lpignore="true" aria-describedby="autodetect-lineup-help" placeholder="Enter one group name per line, e.g.:&#10;Quartet A&#10;Quartet B"></textarea>
           <div class="autodetect-options" aria-label="Auto-detect signal sources">
             <label><input type="checkbox" id="autodetect-use-silence" name="autodetect-use-silence" class="mutating-control" data-lpignore="true" checked> Use silence</label>
             <label><input type="checkbox" id="autodetect-use-color" name="autodetect-use-color" class="mutating-control" data-lpignore="true" checked> Use color</label>
@@ -550,8 +557,17 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
       });
       statusActions.appendChild(undo);
     };
+    const maybeShowOnboarding = () => {
+      const panel = document.getElementById('onboarding-panel');
+      const shortcuts = document.getElementById('shortcuts-help');
+      if (!panel) return;
+      const isEmpty = (labels.boundaries || []).length === 0 && (labels.candidates || []).length === 0;
+      panel.hidden = !isEmpty;
+      if (isEmpty && shortcuts) shortcuts.open = true;
+    };
     const render = () => {
       normalizeLabels();
+      maybeShowOnboarding();
       const boundaries = document.getElementById('boundaries');
       boundaries.innerHTML = '';
       labels.boundaries.forEach((boundary, index) => {

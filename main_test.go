@@ -171,6 +171,57 @@ func TestLibraryShowsHandlerIncludesOnlyPersistedPendingReviewCounts(t *testing.
 	}
 }
 
+// TestLibraryShowsHandlerIncludesBoundaryAndCandidateCounts verifies AC5:
+// the API response carries boundaryCount and candidateCount so the index page
+// can show "No chapters", "N pending reviews", or "✓ Labeled" badges.
+func TestLibraryShowsHandlerIncludesBoundaryAndCandidateCounts(t *testing.T) {
+	handler := libraryShowsHandler(
+		staticShowLister{shows: []hls.Show{
+			{Name: "labeled", Playlist: "/hls/labeled/playlist.m3u8", Status: "ready"},
+			{Name: "pending", Playlist: "/hls/pending/playlist.m3u8", Status: "ready"},
+			{Name: "empty", Playlist: "/hls/empty/playlist.m3u8", Status: "ready"},
+		}},
+		&stubLabelStore{docs: map[string]labels.VideoLabels{
+			"labeled": {
+				Video:      "labeled",
+				Boundaries: []labels.Boundary{{Name: "intro", Start: 0}},
+				Candidates: []labels.Candidate{{Status: "named"}},
+			},
+			"pending": {
+				Video:      "pending",
+				Candidates: []labels.Candidate{{Status: "candidate"}},
+			},
+			"empty": {Video: "empty"},
+		}},
+	)
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/shows", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	var got []libraryShow
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("len(shows) = %d, want 3: %#v", len(got), got)
+	}
+	// "labeled": 1 boundary, 1 candidate (named/handled), 0 pending
+	if got[0].Name != "labeled" || got[0].BoundaryCount != 1 || got[0].CandidateCount != 1 || got[0].PendingReviews != 0 {
+		t.Fatalf("labeled = %#v, want 1 boundary, 1 candidate, 0 pending", got[0])
+	}
+	// "pending": 0 boundaries, 1 candidate (pending), 1 pending review
+	if got[1].Name != "pending" || got[1].BoundaryCount != 0 || got[1].CandidateCount != 1 || got[1].PendingReviews != 1 {
+		t.Fatalf("pending = %#v, want 0 boundaries, 1 candidate, 1 pending", got[1])
+	}
+	// "empty": 0 boundaries, 0 candidates, 0 pending
+	if got[2].Name != "empty" || got[2].BoundaryCount != 0 || got[2].CandidateCount != 0 || got[2].PendingReviews != 0 {
+		t.Fatalf("empty = %#v, want 0 boundaries, 0 candidates, 0 pending", got[2])
+	}
+}
+
 func TestLibraryShowsHandlerFailsClosedWhenPersistedLabelsCannotLoad(t *testing.T) {
 	handler := libraryShowsHandler(
 		staticShowLister{shows: []hls.Show{{Name: "group-01", Status: "ready"}}},

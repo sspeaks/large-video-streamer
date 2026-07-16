@@ -38,6 +38,8 @@
     .showTitle { display: block; overflow: hidden; font-weight: 750; letter-spacing: -.01em; text-overflow: ellipsis; white-space: nowrap; }
     .showState { display: block; margin-top: 2px; color: var(--text-muted); font-size: .85rem; }
     .reviewBadge { display: inline-flex; align-items: center; min-height: 1.5rem; padding: 0 .5rem; border: 1px solid var(--warn-text); border-radius: var(--radius-pill); background: var(--warn-bg); color: var(--warn-text); font-size: .8rem; font-weight: 750; }
+    .reviewBadge--neutral { border-color: var(--secondary-border); background: var(--surface-input); color: var(--text-muted); }
+    .reviewBadge--success { border-color: var(--success-text, #4ade80); background: rgb(74 222 128 / .10); color: var(--success-text, #4ade80); }
     .showAction { color: var(--accent); font-size: .9rem; font-weight: 750; white-space: nowrap; }
     .showCard--processing { border-color: var(--secondary-border); background: rgb(21 27 46 / .6); }
     .showCard--processing .showAction { color: var(--warn-text); }
@@ -276,16 +278,19 @@
         const titleText = displayName(name);
         const ready = show.status !== 'processing' && Boolean(show.playlist);
         const pendingReviews = Math.max(0, Number.parseInt(show.pendingReviews, 10) || 0);
+        const boundaryCount = Math.max(0, Number.parseInt(show.boundaryCount, 10) || 0);
+        const candidateCount = Math.max(0, Number.parseInt(show.candidateCount, 10) || 0);
         const item = document.createElement('li');
         const card = document.createElement(ready ? 'a' : 'div');
         card.className = 'showCard' + (ready ? '' : ' showCard--processing');
 
+        const labelingStatus = pendingReviews > 0
+          ? ', ' + plural(pendingReviews, 'pending review')
+          : (boundaryCount === 0 && candidateCount === 0 ? ', no chapters yet' : (boundaryCount > 0 ? ', labeled' : ''));
+
         if (ready) {
           card.href = '/player?show=' + encodeURIComponent(name);
-          card.setAttribute(
-            'aria-label',
-            titleText + ', ready to play' + (pendingReviews > 0 ? ', ' + plural(pendingReviews, 'pending review') : '')
-          );
+          card.setAttribute('aria-label', titleText + ', ready to play' + labelingStatus);
         } else {
           card.setAttribute('aria-disabled', 'true');
           card.setAttribute(
@@ -316,6 +321,16 @@
           reviewBadge.className = 'reviewBadge';
           reviewBadge.textContent = plural(pendingReviews, 'pending review');
           state.append(document.createTextNode(' · '), reviewBadge);
+        } else if (boundaryCount === 0 && candidateCount === 0) {
+          const badge = document.createElement('span');
+          badge.className = 'reviewBadge reviewBadge--neutral';
+          badge.textContent = 'No chapters';
+          state.append(document.createTextNode(' · '), badge);
+        } else if (boundaryCount > 0) {
+          const badge = document.createElement('span');
+          badge.className = 'reviewBadge reviewBadge--success';
+          badge.textContent = '✓ Labeled';
+          state.append(document.createTextNode(' · '), badge);
         }
         details.append(title, state);
 
