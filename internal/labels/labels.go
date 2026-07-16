@@ -32,6 +32,7 @@ type VideoLabels struct {
 	Video      string      `json:"video"`
 	Boundaries []Boundary  `json:"boundaries"`
 	Candidates []Candidate `json:"candidates"`
+	Lineup     []string    `json:"lineup,omitempty"`
 }
 
 // PendingReviewCount returns the number of candidates without a persisted

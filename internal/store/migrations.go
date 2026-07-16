@@ -117,6 +117,21 @@ CREATE TABLE IF NOT EXISTS legacy_imports (
 )`,
 		},
 	},
+	{
+		version: 7,
+		name:    "lineup",
+		statements: []string{
+			`
+CREATE TABLE IF NOT EXISTS lineup (
+	video TEXT NOT NULL,
+	sort_pos INTEGER NOT NULL CHECK (sort_pos >= 0),
+	name TEXT NOT NULL,
+	created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+	updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+	PRIMARY KEY (video, sort_pos)
+)`,
+		},
+	},
 }
 
 // ApplyMigrations applies all known schema migrations exactly once.

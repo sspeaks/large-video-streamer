@@ -472,3 +472,65 @@ func assertOptionalTimeEqual(t *testing.T, field string, got, want *time.Time) {
 func legacyHash(seed string) string {
 	return strings.Repeat(seed, 64)
 }
+
+func TestImportLegacyStateImportsLineupFromFlatFile(t *testing.T) {
+	ctx := context.Background()
+	stateDir := testDir(t)
+	db, err := Open(ctx, filepath.Join(stateDir, "app.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	legacyDoc := labels.VideoLabels{
+		Boundaries: []labels.Boundary{{Name: "intro", Start: 0}},
+		Lineup:     []string{"group-01", "group-02", "group-01"},
+	}
+	writeJSONFile(t, filepath.Join(stateDir, "labels", "lineup_video.labels.json"), legacyDoc, 0o644)
+
+	if err := ImportLegacyState(ctx, db, stateDir); err != nil {
+		t.Fatalf("ImportLegacyState: %v", err)
+	}
+
+	got, err := NewLabelStore(db).Load("lineup_video")
+	if err != nil {
+		t.Fatalf("Load imported labels: %v", err)
+	}
+	if !reflect.DeepEqual(got.Lineup, legacyDoc.Lineup) {
+		t.Fatalf("imported Lineup = %v, want %v", got.Lineup, legacyDoc.Lineup)
+	}
+}
+
+func TestImportLegacyStateLegacyJSONWithoutLineupLoadsCleanly(t *testing.T) {
+	ctx := context.Background()
+	stateDir := testDir(t)
+	db, err := Open(ctx, filepath.Join(stateDir, "app.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	// Write raw JSON without the lineup field to simulate an older flat-file.
+	oldJSON := []byte(`{"video":"old_video","boundaries":[{"name":"intro","start":0}],"candidates":[]}` + "\n")
+	if err := os.MkdirAll(filepath.Join(stateDir, "labels"), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(stateDir, "labels", "old_video.labels.json"), oldJSON, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	if err := ImportLegacyState(ctx, db, stateDir); err != nil {
+		t.Fatalf("ImportLegacyState: %v", err)
+	}
+
+	got, err := NewLabelStore(db).Load("old_video")
+	if err != nil {
+		t.Fatalf("Load imported labels: %v", err)
+	}
+	if got.Lineup != nil {
+		t.Fatalf("Lineup from legacy file without lineup field = %v, want nil", got.Lineup)
+	}
+	if len(got.Boundaries) != 1 || got.Boundaries[0].Name != "intro" {
+		t.Fatalf("Boundaries from legacy file = %v, want [{intro 0}]", got.Boundaries)
+	}
+}

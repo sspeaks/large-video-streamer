@@ -58,7 +58,7 @@ func TestApplyMigrationsCreatesSchemaIdempotently(t *testing.T) {
 		}
 	}
 
-	wantTables := []string{"boundaries", "candidates", "legacy_imports", "schema_migrations", "shares"}
+	wantTables := []string{"boundaries", "candidates", "legacy_imports", "lineup", "schema_migrations", "shares"}
 	if got := tableNames(t, ctx, db); strings.Join(got, ",") != strings.Join(wantTables, ",") {
 		t.Fatalf("tables = %v, want %v", got, wantTables)
 	}
@@ -75,6 +75,7 @@ func TestApplyMigrationsCreatesSchemaIdempotently(t *testing.T) {
 	assertColumns(t, ctx, db, "boundaries", "video", "sort_pos", "name", "start_seconds")
 	assertColumns(t, ctx, db, "candidates", "video", "sort_pos", "time_seconds", "duration_seconds", "status", "sources_json", "confidence", "suggested_name", "conflict")
 	assertColumns(t, ctx, db, "legacy_imports", "source_kind", "source_id", "imported_at")
+	assertColumns(t, ctx, db, "lineup", "video", "sort_pos", "name")
 }
 
 func TestApplyMigrationsAddsLegacyImportMarkersToExistingDatabase(t *testing.T) {
@@ -114,7 +115,7 @@ func tableNames(t *testing.T, ctx context.Context, db *sql.DB) []string {
 SELECT name
 FROM sqlite_master
 WHERE type = 'table'
-  AND name IN ('schema_migrations', 'shares', 'boundaries', 'candidates', 'legacy_imports')
+  AND name IN ('schema_migrations', 'shares', 'boundaries', 'candidates', 'legacy_imports', 'lineup')
 ORDER BY name`)
 	if err != nil {
 		t.Fatalf("query sqlite_master error = %v", err)

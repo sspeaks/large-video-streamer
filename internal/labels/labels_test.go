@@ -1,6 +1,7 @@
 package labels
 
 import (
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -151,5 +152,50 @@ func TestExportImportTimestampsRoundTrip(t *testing.T) {
 		if got.Boundaries[i] != wantBoundaries[i] {
 			t.Fatalf("boundary %d = %#v, want %#v", i, got.Boundaries[i], wantBoundaries[i])
 		}
+	}
+}
+
+func TestFlatFileSaveLoadRoundTripPreservesLineup(t *testing.T) {
+	store := New(config.Config{StateDir: t.TempDir()})
+	want := VideoLabels{
+		Video:  "demo",
+		Lineup: []string{"group-01", "group-02", "group-01"}, // duplicates preserved
+	}
+	if err := store.Save(want); err != nil {
+		t.Fatalf("Save returned error: %v", err)
+	}
+
+	got, err := store.Load("demo")
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if !reflect.DeepEqual(got.Lineup, want.Lineup) {
+		t.Fatalf("Lineup = %v, want %v", got.Lineup, want.Lineup)
+	}
+}
+
+func TestFlatFileLoadOlderJSONWithoutLineupReturnsNilLineup(t *testing.T) {
+	stateDir := t.TempDir()
+	store := New(config.Config{StateDir: stateDir})
+
+	// Write raw JSON without the lineup field to simulate an older flat-file.
+	oldJSON := []byte(`{"video":"old_video","boundaries":[{"name":"group-a","start":60}],"candidates":[]}` + "\n")
+	labelsDir := stateDir + "/labels"
+	if err := os.MkdirAll(labelsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(labelsDir+"/old_video.labels.json", oldJSON, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	got, err := store.Load("old_video")
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if got.Lineup != nil {
+		t.Fatalf("Lineup from older JSON without lineup field = %v, want nil", got.Lineup)
+	}
+	if len(got.Boundaries) != 1 || got.Boundaries[0].Name != "group-a" {
+		t.Fatalf("Boundaries = %v, want [{group-a 60}]", got.Boundaries)
 	}
 }

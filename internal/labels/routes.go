@@ -313,10 +313,11 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
     const escapeText = (value) => String(value).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
     const escapeAttr = escapeText;
     const normalizeLabels = () => {
-      labels = labels || { video: show, boundaries: [], candidates: [] };
+      labels = labels || { video: show, boundaries: [], candidates: [], lineup: [] };
       labels.video = labels.video || show;
       labels.boundaries = labels.boundaries || [];
       labels.candidates = labels.candidates || [];
+      labels.lineup = labels.lineup || [];
     };
     const candidateStatus = (candidate) => candidate.status || 'candidate';
     const candidateSuggestedName = (candidate) => String((candidate && candidate.suggestedName) || '').trim();
@@ -627,6 +628,7 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
       if (!res.ok) throw new Error(await res.text());
       labels = await res.json();
       normalizeLabels();
+      autodetectLineup.value = labels.lineup.join('\n');
       selectedCandidates.clear();
       render();
       setDirty(false);
@@ -793,8 +795,11 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
       try {
         const res = await fetch(api + '/import', { method: 'POST', body: document.getElementById('timestamps').value });
         if (!res.ok) throw new Error(await res.text());
+        const prevLineup = (labels && labels.lineup) ? [...labels.lineup] : [];
         labels = await res.json();
         normalizeLabels();
+        labels.lineup = prevLineup;
+        autodetectLineup.value = prevLineup.join('\n');
         selectedCandidates.clear();
         setDirty(true);
         render();
@@ -805,6 +810,11 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
     });
     detectButton.addEventListener('click', runDetect);
     autoDetectButton.addEventListener('click', runAutodetect);
+    autodetectLineup.addEventListener('input', () => {
+      normalizeLabels();
+      labels.lineup = autodetectLineup.value.split(/\r?\n/).map((n) => n.trim()).filter(Boolean);
+      setDirty(true);
+    });
     sortControl.addEventListener('change', render);
     hideHandledControl.addEventListener('change', render);
     minDurationControl.addEventListener('input', render);
