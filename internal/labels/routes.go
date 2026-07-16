@@ -990,6 +990,12 @@ func (srv *Server) handleLabelsImport(w http.ResponseWriter, r *http.Request) {
 	}
 	srv.mutationMu.Lock()
 	defer srv.mutationMu.Unlock()
+	existing, err := srv.store.Load(show)
+	if err != nil {
+		srv.safeHTTPError(w, err, show, http.StatusInternalServerError, errPublicLoadFailed)
+		return
+	}
+	labels.Lineup = existing.Lineup
 	if err := srv.saveAndWriteChapters(labels); err != nil {
 		srv.safeHTTPError(w, err, show, http.StatusInternalServerError, errPublicSaveFailed)
 		return
