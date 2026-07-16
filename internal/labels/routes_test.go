@@ -573,3 +573,259 @@ func serveLabelRequest(t *testing.T, mux *http.ServeMux, method, target, body st
 	mux.ServeHTTP(res, req)
 	return res
 }
+
+// errLabelStore is a test double for LabelStore that returns configurable errors.
+type errLabelStore struct {
+	loadResult VideoLabels
+	loadErr    error
+	saveErr    error
+}
+
+func (s *errLabelStore) Load(_ string) (VideoLabels, error) {
+	return s.loadResult, s.loadErr
+}
+
+func (s *errLabelStore) Save(_ VideoLabels) error {
+	return s.saveErr
+}
+
+// serverWithTestLogger wires an authenticated mux around srv, captures log
+// output into the returned buffer, and registers a fake autodetect signals stub
+// so the server is fully ready without real detection tools.
+func serverWithTestLogger(t *testing.T, srv *Server) (*http.ServeMux, *bytes.Buffer) {
+	t.Helper()
+	var logs bytes.Buffer
+	srv.logger = log.New(&logs, "", 0)
+	srv.autodetectSignals = &fakeAutodetectSignals{}
+	authn := auth.New(config.Config{LoginUser: "group-a", LoginPass: "group-b", CookieSecret: []byte("01234567890123456789012345678901")})
+	mux := http.NewServeMux()
+	authn.RegisterRoutes(mux)
+	srv.RegisterRoutes(mux, authn)
+	return mux, &logs
+}
+
+func TestSafeHTTPErrorLabelsGetStoreFailure(t *testing.T) {
+	videoDir := t.TempDir()
+	sentinel := videoDir
+	store := &errLabelStore{loadErr: errors.New("disk error at " + sentinel)}
+	srv := NewServer(config.Config{VideoDir: videoDir, StateDir: t.TempDir(), HLSDir: t.TempDir()}, store)
+	mux, logs := serverWithTestLogger(t, srv)
+
+	res := serveLabelRequest(t, mux, http.MethodGet, "/labels/api/sample_video", "")
+
+	if res.Code != http.StatusInternalServerError {
+		t.Fatalf("GET labels status = %d, want %d", res.Code, http.StatusInternalServerError)
+	}
+	body := strings.TrimSpace(res.Body.String())
+	if body != errPublicLoadFailed {
+		t.Fatalf("body = %q, want %q", body, errPublicLoadFailed)
+	}
+	if strings.Contains(body, sentinel) {
+		t.Fatalf("response body exposes sentinel path %q", sentinel)
+	}
+	if logs.Len() == 0 {
+		t.Fatal("expected server-side log entry for the failure; got none")
+	}
+}
+
+func TestSafeHTTPErrorLabelsPostSaveFailure(t *testing.T) {
+	videoDir := t.TempDir()
+	sentinel := videoDir
+	store := &errLabelStore{saveErr: errors.New("write error at " + sentinel)}
+	srv := NewServer(config.Config{VideoDir: videoDir, StateDir: t.TempDir(), HLSDir: t.TempDir()}, store)
+	mux, logs := serverWithTestLogger(t, srv)
+
+	body := `{"video":"sample_video","boundaries":[],"candidates":[]}`
+	res := serveLabelRequest(t, mux, http.MethodPost, "/labels/api/sample_video", body)
+
+	if res.Code != http.StatusInternalServerError {
+		t.Fatalf("POST labels status = %d, want %d", res.Code, http.StatusInternalServerError)
+	}
+	got := strings.TrimSpace(res.Body.String())
+	if got != errPublicSaveFailed {
+		t.Fatalf("body = %q, want %q", got, errPublicSaveFailed)
+	}
+	if strings.Contains(got, sentinel) {
+		t.Fatalf("response body exposes sentinel path %q", sentinel)
+	}
+	if logs.Len() == 0 {
+		t.Fatal("expected server-side log entry; got none")
+	}
+}
+
+func TestSafeHTTPErrorLabelsImportSaveFailure(t *testing.T) {
+	videoDir := t.TempDir()
+	sentinel := videoDir
+	store := &errLabelStore{saveErr: errors.New("write error at " + sentinel)}
+	srv := NewServer(config.Config{VideoDir: videoDir, StateDir: t.TempDir(), HLSDir: t.TempDir()}, store)
+	mux, logs := serverWithTestLogger(t, srv)
+
+	res := serveLabelRequest(t, mux, http.MethodPost, "/labels/api/sample_video/import", "group-a 00:01:00\n")
+
+	if res.Code != http.StatusInternalServerError {
+		t.Fatalf("POST import status = %d, want %d", res.Code, http.StatusInternalServerError)
+	}
+	got := strings.TrimSpace(res.Body.String())
+	if got != errPublicSaveFailed {
+		t.Fatalf("body = %q, want %q", got, errPublicSaveFailed)
+	}
+	if strings.Contains(got, sentinel) {
+		t.Fatalf("response body exposes sentinel path %q", sentinel)
+	}
+	if logs.Len() == 0 {
+		t.Fatal("expected server-side log entry; got none")
+	}
+}
+
+func TestSafeHTTPErrorLabelsExportStoreFailure(t *testing.T) {
+	videoDir := t.TempDir()
+	sentinel := videoDir
+	store := &errLabelStore{loadErr: errors.New("disk error at " + sentinel)}
+	srv := NewServer(config.Config{VideoDir: videoDir, StateDir: t.TempDir(), HLSDir: t.TempDir()}, store)
+	mux, logs := serverWithTestLogger(t, srv)
+
+	res := serveLabelRequest(t, mux, http.MethodGet, "/labels/api/sample_video/export", "")
+
+	if res.Code != http.StatusInternalServerError {
+		t.Fatalf("GET export status = %d, want %d", res.Code, http.StatusInternalServerError)
+	}
+	got := strings.TrimSpace(res.Body.String())
+	if got != errPublicLoadFailed {
+		t.Fatalf("body = %q, want %q", got, errPublicLoadFailed)
+	}
+	if strings.Contains(got, sentinel) {
+		t.Fatalf("response body exposes sentinel path %q", sentinel)
+	}
+	if logs.Len() == 0 {
+		t.Fatal("expected server-side log entry; got none")
+	}
+}
+
+func TestSafeHTTPErrorMKVImportLoadFailure(t *testing.T) {
+	videoDir := t.TempDir()
+	sentinel := videoDir
+	store := &errLabelStore{loadErr: errors.New("disk error at " + sentinel)}
+	srv := NewServer(config.Config{VideoDir: videoDir, StateDir: t.TempDir(), HLSDir: t.TempDir()}, store)
+	mux, logs := serverWithTestLogger(t, srv)
+
+	res := serveLabelRequest(t, mux, http.MethodPost, "/labels/api/sample_video/mkv/import", "")
+
+	if res.Code != http.StatusInternalServerError {
+		t.Fatalf("POST mkv/import (load) status = %d, want %d", res.Code, http.StatusInternalServerError)
+	}
+	got := strings.TrimSpace(res.Body.String())
+	if got != errPublicLoadFailed {
+		t.Fatalf("body = %q, want %q", got, errPublicLoadFailed)
+	}
+	if strings.Contains(got, sentinel) {
+		t.Fatalf("response body exposes sentinel path %q", sentinel)
+	}
+	if logs.Len() == 0 {
+		t.Fatal("expected server-side log entry; got none")
+	}
+}
+
+func TestSafeHTTPErrorMKVImportToolFailure(t *testing.T) {
+	// importMKVChapters calls ffprobe; it will fail (tool absent or file missing).
+	// Regardless of the internal error, the response must be the bounded public message
+	// and must not expose the VideoDir path.
+	videoDir := t.TempDir()
+	store := &errLabelStore{} // Load succeeds, returns empty labels
+	srv := NewServer(config.Config{VideoDir: videoDir, StateDir: t.TempDir(), HLSDir: t.TempDir()}, store)
+	mux, _ := serverWithTestLogger(t, srv)
+
+	res := serveLabelRequest(t, mux, http.MethodPost, "/labels/api/sample_video/mkv/import", "")
+
+	if res.Code != http.StatusInternalServerError {
+		t.Fatalf("POST mkv/import (tool) status = %d, want %d", res.Code, http.StatusInternalServerError)
+	}
+	got := strings.TrimSpace(res.Body.String())
+	if got != errPublicMKVImport {
+		t.Fatalf("body = %q, want %q", got, errPublicMKVImport)
+	}
+	if strings.Contains(got, videoDir) {
+		t.Fatalf("response body exposes VideoDir path %q", videoDir)
+	}
+}
+
+func TestSafeHTTPErrorMKVEmbedLoadFailure(t *testing.T) {
+	videoDir := t.TempDir()
+	sentinel := videoDir
+	store := &errLabelStore{loadErr: errors.New("disk error at " + sentinel)}
+	srv := NewServer(config.Config{VideoDir: videoDir, StateDir: t.TempDir(), HLSDir: t.TempDir()}, store)
+	mux, logs := serverWithTestLogger(t, srv)
+
+	res := serveLabelRequest(t, mux, http.MethodPost, "/labels/api/sample_video/mkv/embed", "")
+
+	if res.Code != http.StatusInternalServerError {
+		t.Fatalf("POST mkv/embed (load) status = %d, want %d", res.Code, http.StatusInternalServerError)
+	}
+	got := strings.TrimSpace(res.Body.String())
+	if got != errPublicLoadFailed {
+		t.Fatalf("body = %q, want %q", got, errPublicLoadFailed)
+	}
+	if strings.Contains(got, sentinel) {
+		t.Fatalf("response body exposes sentinel path %q", sentinel)
+	}
+	if logs.Len() == 0 {
+		t.Fatal("expected server-side log entry; got none")
+	}
+}
+
+func TestSafeHTTPErrorMKVEmbedToolFailure(t *testing.T) {
+	// exportMKVChapters calls mkvpropedit; it will fail (tool absent or file missing).
+	// Regardless of the internal error, the response must be the bounded public message
+	// and must not expose the VideoDir path.
+	videoDir := t.TempDir()
+	store := &errLabelStore{} // Load succeeds, returns empty labels
+	srv := NewServer(config.Config{VideoDir: videoDir, StateDir: t.TempDir(), HLSDir: t.TempDir()}, store)
+	mux, _ := serverWithTestLogger(t, srv)
+
+	res := serveLabelRequest(t, mux, http.MethodPost, "/labels/api/sample_video/mkv/embed", "")
+
+	if res.Code != http.StatusInternalServerError {
+		t.Fatalf("POST mkv/embed (tool) status = %d, want %d", res.Code, http.StatusInternalServerError)
+	}
+	got := strings.TrimSpace(res.Body.String())
+	if got != errPublicMKVEmbed {
+		t.Fatalf("body = %q, want %q", got, errPublicMKVEmbed)
+	}
+	if strings.Contains(got, videoDir) {
+		t.Fatalf("response body exposes VideoDir path %q", videoDir)
+	}
+}
+
+func TestSafeHTTPErrorLogsUsefulDiagnostics(t *testing.T) {
+	// Verifies that safeHTTPError writes useful (redacted) diagnostics to the
+	// server log while keeping the response bounded.
+	videoDir := t.TempDir()
+	internalMsg := "storage failure: " + videoDir + "/sample_video.labels.json"
+	store := &errLabelStore{loadErr: errors.New(internalMsg)}
+	srv := NewServer(config.Config{VideoDir: videoDir, StateDir: t.TempDir(), HLSDir: t.TempDir()}, store)
+	mux, logs := serverWithTestLogger(t, srv)
+
+	res := serveLabelRequest(t, mux, http.MethodGet, "/labels/api/sample_video", "")
+
+	if res.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d", res.Code, http.StatusInternalServerError)
+	}
+	// Response body must be the bounded public message.
+	got := strings.TrimSpace(res.Body.String())
+	if got != errPublicLoadFailed {
+		t.Fatalf("body = %q, want bounded public message %q", got, errPublicLoadFailed)
+	}
+	// Internal path must not reach the client.
+	if strings.Contains(got, videoDir) {
+		t.Fatalf("response body exposes internal path %q", videoDir)
+	}
+	// Server log must contain a diagnostic entry for the failure.
+	logOut := logs.String()
+	if !strings.Contains(logOut, "label api error") {
+		t.Fatalf("server log = %q, want it to contain \"label api error\"", logOut)
+	}
+	// The internal path should be redacted in the log.
+	if strings.Contains(logOut, videoDir) {
+		t.Fatalf("server log exposes unredacted path %q", videoDir)
+	}
+}
+
