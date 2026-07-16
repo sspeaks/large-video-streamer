@@ -126,7 +126,8 @@ func TestLabelsPageIncludesAutodetectControlsAndRequest(t *testing.T) {
 	out := buf.String()
 
 	wants := []string{
-		`id="autodetect"`,
+		`id="autodetect" class="primary mutating-control"`,
+		"Auto-detect boundaries",
 		`id="autodetect-lineup" name="autodetect-lineup"`,
 		`id="autodetect-use-silence" name="autodetect-use-silence"`,
 		`id="autodetect-use-color" name="autodetect-use-color"`,
@@ -136,11 +137,80 @@ func TestLabelsPageIncludesAutodetectControlsAndRequest(t *testing.T) {
 		"useSilence: autodetectUseSilence.checked",
 		"useColor: autodetectUseColor.checked",
 		"useOCR: autodetectUseOCR.checked",
-		"Suggest boundaries failed:",
+		"Auto-detect failed:",
 	}
 	for _, want := range wants {
 		if !strings.Contains(out, want) {
 			t.Fatalf("labels page should contain %q to wire up autodetect controls", want)
+		}
+	}
+}
+
+func TestLabelsPagePresentsSimplePrimaryAndAdvancedActions(t *testing.T) {
+	var buf bytes.Buffer
+	if err := labelsPageTemplate.Execute(&buf, struct{ Show string }{Show: "quartet_finals"}); err != nil {
+		t.Fatalf("execute labels page template: %v", err)
+	}
+	out := buf.String()
+
+	primaryActions := regexp.MustCompile(`(?s)<div class="actions" aria-label="Label editor actions">(.*?)</div>`).FindString(out)
+	if primaryActions == "" {
+		t.Fatal("labels page should render the primary label editor actions")
+	}
+	for _, want := range []string{`id="add-boundary"`, `id="save"`} {
+		if !strings.Contains(primaryActions, want) {
+			t.Fatalf("primary label editor actions should contain %q", want)
+		}
+	}
+	for _, notWant := range []string{`id="detect"`, `id="autodetect"`, `id="export"`, `id="import"`} {
+		if strings.Contains(primaryActions, notWant) {
+			t.Fatalf("primary label editor actions should not contain advanced or workflow action %q", notWant)
+		}
+	}
+
+	wants := []string{
+		`<details class="help advanced-tools" id="advanced-tools">`,
+		"<summary>Advanced tools</summary>",
+		`id="detect" class="secondary mutating-control">Scan silence only</button>`,
+		`id="export" class="secondary mutating-control">Export timestamps</button>`,
+		`id="import" class="secondary mutating-control">Import timestamps</button>`,
+		`id="timestamps" name="timestamps"`,
+		"Set up auto-detect",
+	}
+	for _, want := range wants {
+		if !strings.Contains(out, want) {
+			t.Fatalf("labels page should contain %q in the simplified workflow", want)
+		}
+	}
+	for _, retired := range []string{">Detect silences</button>", ">Suggest boundaries</button>"} {
+		if strings.Contains(out, retired) {
+			t.Fatalf("labels page should not render retired primary terminology %q", retired)
+		}
+	}
+}
+
+func TestLabelsPageDetectionControlsKeepDistinctEndpointWiring(t *testing.T) {
+	var buf bytes.Buffer
+	if err := labelsPageTemplate.Execute(&buf, struct{ Show string }{Show: "quartet_finals"}); err != nil {
+		t.Fatalf("execute labels page template: %v", err)
+	}
+	out := buf.String()
+
+	wants := []string{
+		`id="autodetect" class="primary mutating-control"`,
+		"Auto-detect boundaries",
+		"fetch(api + '/autodetect', {",
+		`id="detect" class="secondary mutating-control"`,
+		"Scan silence only",
+		"fetch(api + '/detect', { method: 'POST' })",
+		"Auto-detecting…",
+		"Scanning…",
+		"Auto-detect failed:",
+		"Silence scan failed:",
+	}
+	for _, want := range wants {
+		if !strings.Contains(out, want) {
+			t.Fatalf("labels page should contain %q to preserve endpoint wiring and feedback", want)
 		}
 	}
 }
@@ -265,7 +335,7 @@ func TestLabelsPageReconnectsToBackgroundAnalysis(t *testing.T) {
 		"fetch(api + '/autodetect', {",
 		"fetch(api + '/' + operation)",
 		"window.setTimeout(() => checkBackgroundStatus(operation), 3000)",
-		"Suggesting boundaries in the background",
+		"Auto-detecting boundaries in the background",
 		"You can close this page; results will be saved for review.",
 		"await resumeBackgroundJobs()",
 		"await loadLabels()",

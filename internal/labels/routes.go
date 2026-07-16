@@ -113,10 +113,6 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
     <div class="actions" aria-label="Label editor actions">
       <button id="add-boundary" class="secondary mutating-control">Add boundary</button>
       <button id="save" class="primary mutating-control">Save</button>
-      <button id="export" class="secondary mutating-control">Export timestamps</button>
-      <button id="import" class="secondary mutating-control">Import timestamps</button>
-      <button id="detect" class="secondary mutating-control">Detect silences</button>
-      <button id="autodetect" class="secondary mutating-control">Suggest boundaries</button>
     </div>
     <details class="help" id="shortcuts-help">
       <summary>Keyboard shortcuts</summary>
@@ -127,7 +123,7 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
         <li><kbd>r</kbd> — Replay from the current candidate's start time</li>
         <li><kbd>Alt</kbd> + <kbd>↑</kbd> / <kbd>↓</kbd> — Nudge the current candidate by ±5 s (the promoted boundary uses the new time)</li>
         <li><kbd>s</kbd> — Save</li>
-        <li><kbd>d</kbd> — Detect silences</li>
+        <li><kbd>d</kbd> — Scan silence only (advanced)</li>
         <li><kbd>?</kbd> — Show this help</li>
       </ul>
       <p class="help">Single-key shortcuts are ignored while you are typing in a field or the video is focused, so they never interrupt editing or native video controls.</p>
@@ -149,16 +145,17 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
       </section>
       <section>
         <h2>Candidates</h2>
-        <p class="help">Review detected silences, then promote useful ones into named boundaries or reject noise.</p>
+        <p class="help">Auto-detect possible boundaries, then promote useful suggestions into named boundaries or reject noise.</p>
         <div class="autodetect-panel" aria-label="Auto-detect setup">
-          <label class="field-label" for="autodetect-lineup">Lineup for boundary suggestions</label>
-          <p class="help" id="autodetect-lineup-help">Enter one quartet name per non-empty line. Suggestions use the lineup to prefill candidate names, but still need review.</p>
+          <label class="field-label" for="autodetect-lineup">Lineup for auto-detection</label>
+          <p class="help" id="autodetect-lineup-help">Enter one quartet name per non-empty line. Auto-detection uses the lineup to prefill candidate names, but every result still needs review.</p>
           <textarea id="autodetect-lineup" name="autodetect-lineup" class="editable-control" autocomplete="off" data-lpignore="true" aria-describedby="autodetect-lineup-help" placeholder="Quartet A&#10;Quartet B"></textarea>
           <div class="autodetect-options" aria-label="Auto-detect signal sources">
             <label><input type="checkbox" id="autodetect-use-silence" name="autodetect-use-silence" class="mutating-control" data-lpignore="true" checked> Use silence</label>
             <label><input type="checkbox" id="autodetect-use-color" name="autodetect-use-color" class="mutating-control" data-lpignore="true" checked> Use color</label>
             <label><input type="checkbox" id="autodetect-use-ocr" name="autodetect-use-ocr" class="mutating-control" data-lpignore="true"> Use OCR (slow)</label>
           </div>
+          <button id="autodetect" class="primary mutating-control" aria-describedby="autodetect-lineup-help">Auto-detect boundaries</button>
         </div>
         <div class="candidate-tools" aria-label="Candidate filters">
           <label for="candidate-sort">Sort
@@ -190,12 +187,18 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
         </div>
       </section>
     </div>
-    <section>
-      <h2>Plain-text timestamps</h2>
+    <details class="help advanced-tools" id="advanced-tools">
+      <summary>Advanced tools</summary>
+      <p class="help">Run a lower-level silence-only scan or exchange boundaries as plain-text timestamps.</p>
+      <div class="actions" aria-label="Advanced label tools">
+        <button id="detect" class="secondary mutating-control">Scan silence only</button>
+        <button id="export" class="secondary mutating-control">Export timestamps</button>
+        <button id="import" class="secondary mutating-control">Import timestamps</button>
+      </div>
       <label class="field-label" for="timestamps">Plain-text boundaries for Export and Import</label>
       <p class="help">Use this box to copy boundaries out or paste edited boundaries back in. The format starts with a video header, then one boundary name and time per line.</p>
       <textarea id="timestamps" name="timestamps" autocomplete="off" data-lpignore="true" placeholder="&gt; {{.Show}}.mkv&#10;group-a 00:02:05"></textarea>
-    </section>
+    </details>
   </main>
   <script src="/static/hls.min.js"></script>
   <script>
@@ -411,8 +414,8 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
       if (busy && operation) busyOperation = operation;
       if (!busy) busyOperation = '';
       document.querySelectorAll('.mutating-control, .editable-control').forEach((control) => { control.disabled = busy; });
-      detectButton.textContent = busy && busyOperation === 'detect' ? 'Detecting…' : 'Detect silences';
-      autoDetectButton.textContent = busy && busyOperation === 'autodetect' ? 'Suggesting…' : 'Suggest boundaries';
+      detectButton.textContent = busy && busyOperation === 'detect' ? 'Scanning…' : 'Scan silence only';
+      autoDetectButton.textContent = busy && busyOperation === 'autodetect' ? 'Auto-detecting…' : 'Auto-detect boundaries';
       updateBulkControls();
     };
     const boundaryNameForBulk = (base, index, total) => total === 1 ? base : base + '-' + String(index + 1);
@@ -461,7 +464,7 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
     };
     const stepCandidate = (direction) => {
       const items = visiblePendingItems();
-      if (items.length === 0) { setStatus('No pending candidates to review. Run Detect silences first.'); return; }
+      if (items.length === 0) { setStatus('No pending candidates to review. Run auto-detect first.'); return; }
       let idx = items.findIndex((item) => item.key === currentKey);
       if (idx === -1) idx = direction > 0 ? -1 : items.length;
       const nextIdx = idx + direction;
@@ -505,14 +508,14 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
     };
     const replayCurrent = () => {
       const item = ensureCurrent();
-      if (!item) { setStatus('No candidate to replay. Run Detect silences first.'); return; }
+      if (!item) { setStatus('No candidate to replay. Run auto-detect first.'); return; }
       render();
       seekPreview(item.candidate.time);
       setStatus('Replaying from ' + secondsToClock(item.candidate.time) + '.');
     };
     const nudgeCurrentCandidate = (delta) => {
       const item = ensureCurrent();
-      if (!item) { setStatus('No candidate to nudge. Run Detect silences first.'); return; }
+      if (!item) { setStatus('No candidate to nudge. Run auto-detect first.'); return; }
       const oldKey = candidateKey(item.candidate);
       const next = Math.max(0, (Number(item.candidate.time) || 0) + delta);
       item.candidate.time = next;
@@ -565,9 +568,12 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
       const visibleCandidates = candidateItems();
       if (visibleCandidates.length === 0) {
         const row = document.createElement('tr');
-        const message = (labels.candidates || []).length === 0 ? 'No candidates yet. Use Detect silences to find possible boundary points.' : 'No candidates match the current filters. Adjust filters or run Detect silences again.';
-        row.innerHTML = '<td colspan="7" class="empty-state">' + escapeText(message) + ' <button type="button" class="secondary empty-detect mutating-control">Detect silences</button></td>';
-        row.querySelector('.empty-detect').addEventListener('click', runDetect);
+        const message = (labels.candidates || []).length === 0 ? 'No candidates yet. Set up auto-detect above, or use Scan silence only under Advanced tools.' : 'No candidates match the current filters. Adjust the filters or run auto-detect again.';
+        row.innerHTML = '<td colspan="7" class="empty-state">' + escapeText(message) + ' <button type="button" class="secondary empty-autodetect">Set up auto-detect</button></td>';
+        row.querySelector('.empty-autodetect').addEventListener('click', () => {
+          autodetectLineup.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          autodetectLineup.focus();
+        });
         candidates.appendChild(row);
       } else {
         visibleCandidates.forEach((item) => {
@@ -634,8 +640,8 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
         backgroundOperation = operation;
         setBusy(true, operation);
         const message = operation === 'autodetect'
-          ? 'Suggesting boundaries in the background… You can close this page; results will be saved for review.'
-          : 'Detecting silences in the background… You can close this page; results will be saved for review.';
+          ? 'Auto-detecting boundaries in the background… You can close this page; results will be saved for review.'
+          : 'Scanning silence in the background… You can close this page; results will be saved for review.';
         setStatus(message);
         scheduleBackgroundPoll(operation);
         return;
@@ -649,10 +655,10 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
       if (state === 'completed') {
         await loadLabels();
         const count = Number(job.candidateCount) || 0;
-        const verb = operation === 'autodetect' ? 'Suggested' : 'Detected';
+        const verb = operation === 'autodetect' ? 'Auto-detected' : 'Found';
         setStatus(verb + ' ' + count + ' pending candidate boundary(ies) and saved them for review.');
       } else if (state === 'failed') {
-        const prefix = operation === 'autodetect' ? 'Suggest boundaries failed: ' : 'Detect failed: ';
+        const prefix = operation === 'autodetect' ? 'Auto-detect failed: ' : 'Silence scan failed: ';
         setStatus(prefix + (job.error || 'unknown error'));
       }
     };
@@ -702,7 +708,7 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
       }
       backgroundOperation = 'detect';
       setBusy(true, 'detect');
-      setStatus('Starting background silence detection…');
+      setStatus('Starting background silence-only scan…');
       try {
         const res = await fetch(api + '/detect', { method: 'POST' });
         if (!res.ok) throw new Error(await res.text());
@@ -710,25 +716,25 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
       } catch (err) {
         backgroundOperation = '';
         setBusy(false);
-        setStatus('Detect failed: ' + err.message);
+        setStatus('Silence scan failed: ' + err.message);
       }
     };
     const parseAutodetectLineup = () => autodetectLineup.value.split(/\r?\n/).map((name) => name.trim()).filter(Boolean).map((name) => ({ name: name }));
     const runAutodetect = async () => {
       if (busy) return;
       if (dirty) {
-        setStatus('Save your current label changes before suggesting boundaries.');
+        setStatus('Save your current label changes before starting auto-detection.');
         return;
       }
       const lineup = parseAutodetectLineup();
       if (lineup.length === 0) {
-        setStatus('Enter at least one quartet name before suggesting boundaries.');
+        setStatus('Enter at least one quartet name before starting auto-detection.');
         autodetectLineup.focus();
         return;
       }
       backgroundOperation = 'autodetect';
       setBusy(true, 'autodetect');
-      setStatus('Starting background boundary suggestions…');
+      setStatus('Starting background auto-detection…');
       try {
         const res = await fetch(api + '/autodetect', {
           method: 'POST',
@@ -745,7 +751,7 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
       } catch (err) {
         backgroundOperation = '';
         setBusy(false);
-        setStatus('Suggest boundaries failed: ' + err.message);
+        setStatus('Auto-detect failed: ' + err.message);
       }
     };
     document.getElementById('add-boundary').addEventListener('click', () => {

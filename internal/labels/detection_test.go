@@ -65,8 +65,8 @@ func TestDetectRunsAfterStartRequestReturnsAndPersistsCandidates(t *testing.T) {
 	}
 
 	status := decodeDetectionStatus(t, serveNoAuthLabelRequest(mux, http.MethodGet, "/labels/api/sample_video/detect", ""))
-	if status.State != detectionRunning {
-		t.Fatalf("detection state = %q, want %q", status.State, detectionRunning)
+	if status.State != detectionRunning || status.Operation != string(detectionOperationSilence) {
+		t.Fatalf("silence-only status = %#v, want running detect operation", status)
 	}
 
 	duplicate := serveNoAuthLabelRequest(mux, http.MethodPost, "/labels/api/sample_video/detect", "")
@@ -89,6 +89,10 @@ func TestDetectRunsAfterStartRequestReturnsAndPersistsCandidates(t *testing.T) {
 	}
 	if len(labelDoc.Candidates) != 1 || labelDoc.Candidates[0].Time != 42 || labelDoc.Candidates[0].Status != "candidate" {
 		t.Fatalf("persisted candidates = %#v, want candidate at 42s", labelDoc.Candidates)
+	}
+	candidate := labelDoc.Candidates[0]
+	if candidate.SuggestedName != "" || candidate.Confidence != 0 || len(candidate.Sources) != 0 {
+		t.Fatalf("silence-only candidate = %#v, want raw candidate without auto-detect metadata", candidate)
 	}
 }
 
@@ -174,6 +178,10 @@ func TestAutodetectRunsAfterStartRequestReturnsAndPersistsCandidates(t *testing.
 	}
 	if len(labelDoc.Candidates) != 1 || labelDoc.Candidates[0].Time != 42 || labelDoc.Candidates[0].SuggestedName != "quartet-a" {
 		t.Fatalf("persisted candidates = %#v, want quartet-a candidate at 42s", labelDoc.Candidates)
+	}
+	candidate := labelDoc.Candidates[0]
+	if candidate.Confidence == 0 || len(candidate.Sources) == 0 {
+		t.Fatalf("auto-detect candidate = %#v, want ranked source metadata", candidate)
 	}
 }
 
