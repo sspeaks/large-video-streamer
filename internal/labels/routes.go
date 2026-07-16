@@ -15,6 +15,13 @@ import (
 	"github.com/sspeaks/large-video-streamer/internal/auth"
 )
 
+const (
+	errPublicLoadFailed = "failed to load labels"
+	errPublicSaveFailed = "failed to save labels"
+	errPublicMKVImport  = "failed to import MKV chapters"
+	errPublicMKVEmbed   = "failed to embed MKV chapters"
+)
+
 var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doctype html>
 <html lang="en">
 <head>
@@ -923,7 +930,7 @@ func (srv *Server) handleLabelsGet(w http.ResponseWriter, r *http.Request) {
 	}
 	labels, err := srv.store.Load(show)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		srv.safeHTTPError(w, err, show, http.StatusInternalServerError, errPublicLoadFailed)
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
@@ -949,7 +956,7 @@ func (srv *Server) handleLabelsPost(w http.ResponseWriter, r *http.Request) {
 	srv.mutationMu.Lock()
 	defer srv.mutationMu.Unlock()
 	if err := srv.saveAndWriteChapters(labels); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		srv.safeHTTPError(w, err, show, http.StatusInternalServerError, errPublicSaveFailed)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -974,7 +981,7 @@ func (srv *Server) handleLabelsImport(w http.ResponseWriter, r *http.Request) {
 	srv.mutationMu.Lock()
 	defer srv.mutationMu.Unlock()
 	if err := srv.saveAndWriteChapters(labels); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		srv.safeHTTPError(w, err, show, http.StatusInternalServerError, errPublicSaveFailed)
 		return
 	}
 	writeJSON(w, http.StatusOK, labels)
@@ -987,7 +994,7 @@ func (srv *Server) handleLabelsExport(w http.ResponseWriter, r *http.Request) {
 	}
 	labels, err := srv.store.Load(show)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		srv.safeHTTPError(w, err, show, http.StatusInternalServerError, errPublicLoadFailed)
 		return
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
@@ -1004,18 +1011,18 @@ func (srv *Server) handleMKVImport(w http.ResponseWriter, r *http.Request) {
 
 	labels, err := srv.store.Load(show)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		srv.safeHTTPError(w, err, show, http.StatusInternalServerError, errPublicLoadFailed)
 		return
 	}
 	boundaries, err := importMKVChapters(filepath.Join(srv.cfg.VideoDir, show+".mkv"))
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		srv.safeHTTPError(w, err, show, http.StatusInternalServerError, errPublicMKVImport)
 		return
 	}
 	labels.Boundaries = sortedBoundaries(append(labels.Boundaries, boundaries...))
 	labels.Video = show
 	if err := srv.saveAndWriteChapters(labels); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		srv.safeHTTPError(w, err, show, http.StatusInternalServerError, errPublicSaveFailed)
 		return
 	}
 	writeJSON(w, http.StatusOK, labels)
@@ -1028,11 +1035,11 @@ func (srv *Server) handleMKVEmbed(w http.ResponseWriter, r *http.Request) {
 	}
 	labels, err := srv.store.Load(show)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		srv.safeHTTPError(w, err, show, http.StatusInternalServerError, errPublicLoadFailed)
 		return
 	}
 	if err := exportMKVChapters(filepath.Join(srv.cfg.VideoDir, show+".mkv"), labels.Boundaries); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		srv.safeHTTPError(w, err, show, http.StatusInternalServerError, errPublicMKVEmbed)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -1204,6 +1211,14 @@ func validateBoundaryNames(boundaries []Boundary) error {
 		}
 	}
 	return nil
+}
+
+// safeHTTPError logs a redacted internal diagnostic server-side and writes a
+// bounded stable public message to the response. Use for all store and
+// filesystem failures; never pass err.Error() directly to http.Error.
+func (srv *Server) safeHTTPError(w http.ResponseWriter, err error, show string, code int, publicMsg string) {
+	srv.logger.Printf("[%s] label api error: %s", show, redactDetectionDiagnostic(err.Error(), srv.cfg, show))
+	http.Error(w, publicMsg, code)
 }
 
 func (srv *Server) saveAndWriteChapters(labels VideoLabels) error {
