@@ -19,7 +19,21 @@ result-*
 .squad/.scratch/
 .squad/.cache/
 .squad/ralph-circuit-breaker.json
-.squad/memory/audit.jsonl
+# Squad: mutable state owned by the two-layer backend
+.squad/decisions.md
+.squad/decisions-archive.md
+.squad/agents/*/history.md
+.squad/agents/*/history-archive.md
+.squad/casting/history.json
+.squad/identity/
+.squad/memory/index.json
+.squad/memory/audit*.jsonl
+.squad/memory/local/
+.squad/memory/policy-inbox/
+.squad/memory/semantic-inbox/
+.squad/memory/tombstones/
+.squad/rai/audit-trail.md
+.squad/fact-checker/audit-trail.md
 # Squad: SubSquad activation file (local to this machine)
 .squad-workstream
 
