@@ -126,11 +126,13 @@ func TestDetectionFailureStatusAndLogAreSanitized(t *testing.T) {
 			context:   "ffmpeg visual detection failed",
 			start: func(srv *Server, mux *http.ServeMux) *httptest.ResponseRecorder {
 				sourcePath := filepath.Join(srv.cfg.VideoDir, show+".mkv")
+				sourceFilename := show + ".mkv"
 				srv.autodetectSignals = &fakeAutodetectSignals{
 					sceneErr: fmt.Errorf(
-						"ffmpeg visual detection failed: exit status 1: Input #0 from '%s'; %s: Invalid data found",
+						"ffmpeg visual detection failed: exit status 1: Input #0 from '%s'; %s: Invalid data found for %s",
 						sourcePath,
 						sourcePath,
+						sourceFilename,
 					),
 				}
 				return serveNoAuthLabelRequest(
