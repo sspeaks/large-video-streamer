@@ -192,6 +192,102 @@ func TestLabelStoreConcurrentAccess(t *testing.T) {
 	}
 }
 
+func TestLabelStoreSaveLoadRoundTripPreservesLineupOrder(t *testing.T) {
+	_, db, store := newTestLabelStore(t)
+	defer db.Close()
+
+	want := labels.VideoLabels{
+		Video:  "demo",
+		Lineup: []string{"group-01", "group-02", "group-01"}, // duplicates preserved
+	}
+	if err := store.Save(want); err != nil {
+		t.Fatalf("Save returned error: %v", err)
+	}
+
+	got, err := store.Load("demo")
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Load = %#v, want %#v", got, want)
+	}
+}
+
+func TestLabelStoreSaveReplacesLineup(t *testing.T) {
+	_, db, store := newTestLabelStore(t)
+	defer db.Close()
+
+	first := labels.VideoLabels{
+		Video:  "demo",
+		Lineup: []string{"stale-a", "stale-b"},
+	}
+	if err := store.Save(first); err != nil {
+		t.Fatalf("Save first returned error: %v", err)
+	}
+
+	want := labels.VideoLabels{Video: "demo"}
+	if err := store.Save(want); err != nil {
+		t.Fatalf("Save replacement returned error: %v", err)
+	}
+
+	got, err := store.Load("demo")
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if len(got.Lineup) != 0 {
+		t.Fatalf("Lineup after removal = %v, want empty", got.Lineup)
+	}
+}
+
+func TestLabelStoreMissingLineupReturnsNil(t *testing.T) {
+	_, db, store := newTestLabelStore(t)
+	defer db.Close()
+
+	want := labels.VideoLabels{
+		Video:      "demo",
+		Boundaries: []labels.Boundary{{Name: "chapter-a", Start: 10}},
+	}
+	if err := store.Save(want); err != nil {
+		t.Fatalf("Save returned error: %v", err)
+	}
+
+	got, err := store.Load("demo")
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if got.Lineup != nil {
+		t.Fatalf("Lineup with no rows = %v, want nil", got.Lineup)
+	}
+}
+
+func TestLabelStoreSaveLoadRoundTripWithLineupAndOtherFields(t *testing.T) {
+	_, db, store := newTestLabelStore(t)
+	defer db.Close()
+
+	want := labels.VideoLabels{
+		Video: "demo",
+		Boundaries: []labels.Boundary{
+			{Name: "chapter-a", Start: 0},
+			{Name: "chapter-b", Start: 60},
+		},
+		Candidates: []labels.Candidate{
+			{Time: 30, Duration: 1, Status: "candidate"},
+		},
+		Lineup: []string{"group-01", "group-02", "group-03"},
+	}
+	if err := store.Save(want); err != nil {
+		t.Fatalf("Save returned error: %v", err)
+	}
+
+	got, err := store.Load("demo")
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Load = %#v, want %#v", got, want)
+	}
+}
+
 func newTestLabelStore(t *testing.T) (context.Context, *sql.DB, *SQLiteLabelStore) {
 	t.Helper()
 	ctx := context.Background()

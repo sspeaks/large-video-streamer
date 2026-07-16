@@ -350,3 +350,58 @@ func TestLabelsPageReconnectsToBackgroundAnalysis(t *testing.T) {
 		t.Fatal("completed background analysis should load persisted candidates as saved state")
 	}
 }
+
+func TestLabelsPageHydratesLineupTextareaOnLoad(t *testing.T) {
+	var buf bytes.Buffer
+	if err := labelsPageTemplate.Execute(&buf, struct{ Show string }{Show: "quartet_finals"}); err != nil {
+		t.Fatalf("execute labels page template: %v", err)
+	}
+	out := buf.String()
+
+	wants := []string{
+		"labels.lineup = labels.lineup || []",
+		"autodetectLineup.value = labels.lineup.join('\\n')",
+	}
+	for _, want := range wants {
+		if !strings.Contains(out, want) {
+			t.Fatalf("labels page should contain %q to hydrate the lineup textarea on load", want)
+		}
+	}
+}
+
+func TestLabelsPageLineupDirtyTracking(t *testing.T) {
+	var buf bytes.Buffer
+	if err := labelsPageTemplate.Execute(&buf, struct{ Show string }{Show: "quartet_finals"}); err != nil {
+		t.Fatalf("execute labels page template: %v", err)
+	}
+	out := buf.String()
+
+	wants := []string{
+		"autodetectLineup.addEventListener('input'",
+		"labels.lineup = autodetectLineup.value.split(/\\r?\\n/).map((n) => n.trim()).filter(Boolean)",
+	}
+	for _, want := range wants {
+		if !strings.Contains(out, want) {
+			t.Fatalf("labels page should contain %q to sync lineup to labels and mark page dirty", want)
+		}
+	}
+}
+
+func TestLabelsPagePreservesLineupAcrossTimestampImport(t *testing.T) {
+	var buf bytes.Buffer
+	if err := labelsPageTemplate.Execute(&buf, struct{ Show string }{Show: "quartet_finals"}); err != nil {
+		t.Fatalf("execute labels page template: %v", err)
+	}
+	out := buf.String()
+
+	wants := []string{
+		"const prevLineup = (labels && labels.lineup) ? [...labels.lineup] : []",
+		"labels.lineup = prevLineup",
+		"autodetectLineup.value = prevLineup.join('\\n')",
+	}
+	for _, want := range wants {
+		if !strings.Contains(out, want) {
+			t.Fatalf("labels page should contain %q to preserve lineup when importing timestamp text", want)
+		}
+	}
+}

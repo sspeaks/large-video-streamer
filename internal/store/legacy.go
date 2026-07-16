@@ -273,6 +273,13 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			return fmt.Errorf("insert legacy candidate %d for %q: %w", sortPos, doc.Video, err)
 		}
 	}
+	for sortPos, name := range doc.Lineup {
+		if _, err := tx.ExecContext(ctx, `
+INSERT INTO lineup (video, sort_pos, name)
+VALUES (?, ?, ?)`, doc.Video, sortPos, name); err != nil {
+			return fmt.Errorf("insert legacy lineup entry %d for %q: %w", sortPos, doc.Video, err)
+		}
+	}
 	return nil
 }
 

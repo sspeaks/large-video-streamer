@@ -43,6 +43,12 @@ func (s *SQLiteLabelStore) Load(video string) (labels.VideoLabels, error) {
 	}
 	result.Candidates = candidates
 
+	lineup, err := s.loadLineup(ctx, video)
+	if err != nil {
+		return labels.VideoLabels{}, err
+	}
+	result.Lineup = lineup
+
 	return result, nil
 }
 
@@ -67,6 +73,9 @@ func (s *SQLiteLabelStore) Save(labelDoc labels.VideoLabels) error {
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM candidates WHERE video = ?`, labelDoc.Video); err != nil {
 		return fmt.Errorf("replace candidates for %q: %w", labelDoc.Video, err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM lineup WHERE video = ?`, labelDoc.Video); err != nil {
+		return fmt.Errorf("replace lineup for %q: %w", labelDoc.Video, err)
 	}
 
 	for sortPos, boundary := range labelDoc.Boundaries {
@@ -99,10 +108,43 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		}
 	}
 
+	for sortPos, name := range labelDoc.Lineup {
+		if _, err := tx.ExecContext(ctx, `
+INSERT INTO lineup (video, sort_pos, name)
+VALUES (?, ?, ?)`, labelDoc.Video, sortPos, name); err != nil {
+			return fmt.Errorf("insert lineup entry %d for %q: %w", sortPos, labelDoc.Video, err)
+		}
+	}
+
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit labels transaction: %w", err)
 	}
 	return nil
+}
+
+func (s *SQLiteLabelStore) loadLineup(ctx context.Context, video string) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT name
+FROM lineup
+WHERE video = ?
+ORDER BY sort_pos`, video)
+	if err != nil {
+		return nil, fmt.Errorf("load lineup for %q: %w", video, err)
+	}
+	defer rows.Close()
+
+	var names []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, fmt.Errorf("scan lineup entry for %q: %w", video, err)
+		}
+		names = append(names, name)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("load lineup for %q: %w", video, err)
+	}
+	return names, nil
 }
 
 func (s *SQLiteLabelStore) loadBoundaries(ctx context.Context, video string) ([]labels.Boundary, error) {
