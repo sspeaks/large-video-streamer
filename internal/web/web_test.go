@@ -27,6 +27,29 @@ func TestIndexServesHTMLWithShowsFetch(t *testing.T) {
 	}
 }
 
+func TestIndexIncludesAccessiblePendingReviewIndicator(t *testing.T) {
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+
+	Index().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("Index() status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	body := rec.Body.String()
+	wants := []string{
+		"show.pendingReviews",
+		"className = 'reviewBadge'",
+		"plural(pendingReviews, 'pending review')",
+		"titleText + ', ready to play'",
+	}
+	for _, want := range wants {
+		if !strings.Contains(body, want) {
+			t.Fatalf("Index() body does not contain %q for the pending-review indicator", want)
+		}
+	}
+}
+
 func TestPlayerServesHTMLWithHLSAndChapters(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/player?show=demo", nil)

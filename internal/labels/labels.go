@@ -33,6 +33,18 @@ type VideoLabels struct {
 	Candidates []Candidate `json:"candidates"`
 }
 
+// PendingReviewCount returns the number of candidates without a persisted
+// named or rejected decision.
+func PendingReviewCount(candidates []Candidate) int {
+	pending := 0
+	for _, candidate := range candidates {
+		if candidate.Status != "named" && candidate.Status != "rejected" {
+			pending++
+		}
+	}
+	return pending
+}
+
 // LabelStore persists per-video label sidecars.
 type LabelStore interface {
 	Load(video string) (VideoLabels, error)

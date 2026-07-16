@@ -37,6 +37,7 @@
     .showDetails { min-width: 0; }
     .showTitle { display: block; overflow: hidden; font-weight: 750; letter-spacing: -.01em; text-overflow: ellipsis; white-space: nowrap; }
     .showState { display: block; margin-top: 2px; color: var(--text-muted); font-size: .85rem; }
+    .reviewBadge { display: inline-flex; align-items: center; min-height: 1.5rem; padding: 0 .5rem; border: 1px solid var(--warn-text); border-radius: var(--radius-pill); background: var(--warn-bg); color: var(--warn-text); font-size: .8rem; font-weight: 750; }
     .showAction { color: var(--accent); font-size: .9rem; font-weight: 750; white-space: nowrap; }
     .showCard--processing { border-color: var(--secondary-border); background: rgb(21 27 46 / .6); }
     .showCard--processing .showAction { color: var(--warn-text); }
@@ -274,15 +275,23 @@
         const name = String(show.name || 'Untitled show');
         const titleText = displayName(name);
         const ready = show.status !== 'processing' && Boolean(show.playlist);
+        const pendingReviews = Math.max(0, Number.parseInt(show.pendingReviews, 10) || 0);
         const item = document.createElement('li');
         const card = document.createElement(ready ? 'a' : 'div');
         card.className = 'showCard' + (ready ? '' : ' showCard--processing');
 
         if (ready) {
           card.href = '/player?show=' + encodeURIComponent(name);
-          card.setAttribute('aria-label', titleText + ', ready to play');
+          card.setAttribute(
+            'aria-label',
+            titleText + ', ready to play' + (pendingReviews > 0 ? ', ' + plural(pendingReviews, 'pending review') : '')
+          );
         } else {
           card.setAttribute('aria-disabled', 'true');
+          card.setAttribute(
+            'aria-label',
+            titleText + ', preparing the stream' + (pendingReviews > 0 ? ', ' + plural(pendingReviews, 'pending review') : '')
+          );
         }
 
         const icon = document.createElement('span');
@@ -302,6 +311,12 @@
         const state = document.createElement('span');
         state.className = 'showState';
         state.textContent = ready ? 'Ready to watch' : 'Preparing the stream';
+        if (pendingReviews > 0) {
+          const reviewBadge = document.createElement('span');
+          reviewBadge.className = 'reviewBadge';
+          reviewBadge.textContent = plural(pendingReviews, 'pending review');
+          state.append(document.createTextNode(' · '), reviewBadge);
+        }
         details.append(title, state);
 
         const action = document.createElement('span');

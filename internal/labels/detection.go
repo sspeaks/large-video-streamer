@@ -151,13 +151,7 @@ func (m *detectionManager) run(key detectionJobKey, build candidateBuilder) {
 		return
 	}
 
-	pending := 0
-	for _, candidate := range labelDoc.Candidates {
-		if candidate.Status != "named" && candidate.Status != "rejected" {
-			pending++
-		}
-	}
-	m.finish(key, pending, nil)
+	m.finish(key, PendingReviewCount(labelDoc.Candidates), nil)
 }
 
 func (m *detectionManager) finish(key detectionJobKey, candidateCount int, err error) {
