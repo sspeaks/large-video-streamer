@@ -233,3 +233,117 @@ func TestLoadFlatFileStateFlag(t *testing.T) {
 		t.Fatal("UseFlatFileState = false, want true")
 	}
 }
+
+// TestRelativeDirectoryPathsNormalizedToAbsolute verifies that relative
+// VideoDir, StateDir, and HLSDir inputs are resolved to absolute paths by
+// Load(). Paths are constructed from placeholders; no real media paths or
+// personal data are embedded.
+func TestRelativeDirectoryPathsNormalizedToAbsolute(t *testing.T) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name         string
+		videoDir     string
+		stateDirEnv  string // empty = do not set STATE_DIRECTORY
+		hlsDirEnv    string // empty = do not set HLS_DIR
+		wantVideoDir string
+		wantStateDir string
+		wantHLSDir   string
+	}{
+		{
+			name:         "relative VideoDir normalized",
+			videoDir:     "rel-video",
+			hlsDirEnv:    filepath.Join(cwd, "abs-hls"),
+			wantVideoDir: filepath.Join(cwd, "rel-video"),
+			wantHLSDir:   filepath.Join(cwd, "abs-hls"),
+			wantStateDir: cwd, // parent of abs-hls has no sub-path component
+		},
+		{
+			name:         "relative HLSDir normalized",
+			videoDir:     filepath.Join(cwd, "abs-video"),
+			hlsDirEnv:    "rel-hls",
+			wantVideoDir: filepath.Join(cwd, "abs-video"),
+			wantHLSDir:   filepath.Join(cwd, "rel-hls"),
+			wantStateDir: cwd, // filepath.Dir("rel-hls") == "." -> abs == cwd
+		},
+		{
+			name:         "explicit relative StateDir normalized",
+			videoDir:     filepath.Join(cwd, "abs-video"),
+			stateDirEnv:  "rel-state",
+			wantVideoDir: filepath.Join(cwd, "abs-video"),
+			wantStateDir: filepath.Join(cwd, "rel-state"),
+			wantHLSDir:   filepath.Join(cwd, "rel-state", "hls"), // derived from normalized StateDir
+		},
+		{
+			name:         "all relative inputs normalized",
+			videoDir:     "rel-video",
+			hlsDirEnv:    "rel-hls",
+			wantVideoDir: filepath.Join(cwd, "rel-video"),
+			wantHLSDir:   filepath.Join(cwd, "rel-hls"),
+			wantStateDir: cwd, // filepath.Dir("rel-hls") == "." -> abs == cwd
+		},
+		{
+			name:         "default derived dirs become absolute",
+			videoDir:     filepath.Join(cwd, "abs-video"),
+			// no HLS_DIR, no STATE_DIRECTORY: defaults to "state" / "state/hls"
+			wantVideoDir: filepath.Join(cwd, "abs-video"),
+			wantStateDir: filepath.Join(cwd, "state"),
+			wantHLSDir:   filepath.Join(cwd, "state", "hls"),
+		},
+		{
+			name:         "absolute inputs unchanged",
+			videoDir:     filepath.Join(cwd, "abs-video"),
+			stateDirEnv:  filepath.Join(cwd, "abs-state"),
+			hlsDirEnv:    filepath.Join(cwd, "abs-hls"),
+			wantVideoDir: filepath.Join(cwd, "abs-video"),
+			wantStateDir: filepath.Join(cwd, "abs-state"),
+			wantHLSDir:   filepath.Join(cwd, "abs-hls"),
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, name := range []string{
+				"HLS_DIR", "STATE_DIRECTORY", "DB_PATH",
+				"COOKIE_SECRET", "COOKIE_SECRET_FILE",
+				"LOGIN_USER", "LOGIN_USER_FILE", "LOGIN_PASS", "LOGIN_PASS_FILE",
+				"LISTEN_ADDR", "VIDSTREAMER_FLAT_FILE_STATE",
+			} {
+				t.Setenv(name, "")
+			}
+			t.Setenv("VIDEO_DIR", tc.videoDir)
+			t.Setenv("VIDSTREAMER_DEV_NOAUTH", "1")
+			if tc.hlsDirEnv != "" {
+				t.Setenv("HLS_DIR", tc.hlsDirEnv)
+			}
+			if tc.stateDirEnv != "" {
+				t.Setenv("STATE_DIRECTORY", tc.stateDirEnv)
+			}
+
+			cfg, err := Load()
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+
+			if cfg.VideoDir != tc.wantVideoDir {
+				t.Errorf("VideoDir = %q, want %q", cfg.VideoDir, tc.wantVideoDir)
+			}
+			if cfg.HLSDir != tc.wantHLSDir {
+				t.Errorf("HLSDir = %q, want %q", cfg.HLSDir, tc.wantHLSDir)
+			}
+			if cfg.StateDir != tc.wantStateDir {
+				t.Errorf("StateDir = %q, want %q", cfg.StateDir, tc.wantStateDir)
+			}
+
+			// Invariant: all directory paths must be absolute regardless of input form.
+			for _, p := range []string{cfg.VideoDir, cfg.HLSDir, cfg.StateDir} {
+				if !filepath.IsAbs(p) {
+					t.Errorf("path %q is not absolute", p)
+				}
+			}
+		})
+	}
+}
