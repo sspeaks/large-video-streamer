@@ -1,10 +1,12 @@
 ---
-updated_at: 2026-07-14T14:49:22.465-07:00
+updated_at: 2026-07-16T13:33:54.724-07:00
 focus_area: Autonomous performance labeling + per-performance sharing
 active_issues: []
 ---
 
 # What We're Focused On
+
+**Current queue:** No open GitHub issues or PRs. Ralph is in idle-watch after PRs #12, #15, and #16 merged.
 
 **Phase 1: Autonomous performance boundary detection**
 Neo is leading detection algorithm work in `internal/detect` and `internal/labels`. Goal: measurable precision/recall at ±20s tolerance against ground-truth timestamps. Mouse owns the evaluation harness and coverage.

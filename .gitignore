@@ -18,6 +18,8 @@ result-*
 .squad/sessions/
 .squad/.scratch/
 .squad/.cache/
+.squad/ralph-circuit-breaker.json
+.squad/memory/audit.jsonl
 # Squad: SubSquad activation file (local to this machine)
 .squad-workstream
 

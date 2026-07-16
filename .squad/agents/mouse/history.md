@@ -20,3 +20,6 @@ Go + Nix HLS streaming app. Testing responsibilities span: `go test ./...` corre
 ## Learnings
 
 Initial setup complete. Focus: test coverage, labeling accuracy validation, share link correctness.
+
+
+📌 Team update (2026-07-16T12:38:13.560-07:00): Approved PR #15 (Trinity path normalization) and PR #16 (Tank safe HTTP errors). Design contract validated. Two non-blocking gaps noted in PR #15 review (cfg.DBPath absoluteness, end-to-end normalization→redaction test) for future sprints. All tests maintain anonymized show names (no PII).

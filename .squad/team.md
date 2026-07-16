@@ -31,6 +31,17 @@
 - **Repo:** `github.com/sspeaks/large-video-streamer`
 - **Purpose:** Self-hosted, auth-gated website that streams large barbershop-competition videos over HLS. Packaged as a standalone Go + Nix flake with a reusable `nixosModules.vidStreamer` NixOS module.
 
+## Issue Source
+
+**Repository:** sspeaks/large-video-streamer
+
+**Connected:** 2026-07-16
+
+**Platform:** GitHub
+
+**Filters:**
+- Labels: `squad`
+
 ### Product Priorities
 
 1. **Autonomous performance boundary detection** — precision/recall benchmarks against labeled ground truth at ±20s tolerance

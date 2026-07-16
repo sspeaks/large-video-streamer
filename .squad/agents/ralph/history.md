@@ -18,3 +18,9 @@ Self-hosted HLS video streamer. The GitHub repo is `github.com/sspeaks/large-vid
 ## Learnings
 
 Initial setup complete. Squad label convention seeded.
+
+
+📌 Team update (2026-07-16T12:38:13.560-07:00): PR #12 merged after parallel review cycle (Morpheus approved, Rai green, Fact Checker verified). Issues #11 closed, #13/#14 created and routed. Design Review ceremony initiated.
+
+
+📌 Team update (2026-07-16T12:38:13.560-07:00): Ralph complete session summary — PRs #12, #15, #16 merged (3 total); issues #11, #13, #14 closed (3 total). Design Review approved contract for parallel #13/#14 work (Trinity path normalization, Tank safe HTTP errors). Board clear (0 open issues/PRs). Idle-watch active.

@@ -20,3 +20,12 @@ Self-hosted HLS video streamer packaged as a standalone Go + Nix flake (`github.
 ## Learnings
 
 Initial setup complete. Focus: HLS pipeline correctness and NixOS packaging reliability.
+
+## 2026-07-16 — Issue #13: normalize relative diagnostic roots
+
+Resolved by adding `filepath.Abs()` normalization in `config.Load()` for VideoDir, HLSDir, and StateDir immediately after path derivation and before dbPath computation. Errors surface with field context; no silent fallback. Added 6-case table-driven test covering relative inputs, default derived paths, and absolute-path invariants. All tests and Nix build green. PR #15 merged-ready.
+
+**Key pattern:** normalize at config-load time, not at call sites — keeps redaction logic in detection.go simpler and guarantees all consumers see absolute paths.
+
+
+📌 Team update (2026-07-16T12:38:13.560-07:00): Issue #13 (path normalization) completed. Config.Load() now normalizes VideoDir/StateDir/HLSDir to absolute paths via filepath.Abs(). All 16 config tests passing; full suite green (10 packages); Nix build clean. Merge 594ea645; issue #13 closed.
