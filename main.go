@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -53,19 +54,7 @@ func main() {
 	// (the device cookie is the credential).
 	shareSrv.RegisterRoutes(mux, a)
 	// Gated JSON list of available shows for the index page (401 when unauthenticated).
-	mux.Handle("GET /api/shows", a.RequireMedia(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		shows, err := hlsSrv.ListShows()
-		if err != nil {
-			http.Error(w, "internal error", http.StatusInternalServerError)
-			return
-		}
-		if shows == nil {
-			shows = []hls.Show{}
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("Cache-Control", "no-store")
-		_ = json.NewEncoder(w).Encode(shows)
-	})))
+	mux.Handle("GET /api/shows", a.RequireMedia(libraryShowsHandler(hlsSrv, labelStore)))
 	mux.Handle("GET /player", a.RequirePage(web.Player()))
 	mux.Handle("GET /{$}", a.RequirePage(web.Index()))
 	// Public favicon so every page (including /login) gets a 200 instead of a
@@ -106,6 +95,55 @@ func openStateStores(ctx context.Context, cfg config.Config) (share.ShareStore, 
 }
 
 func noopClose() error { return nil }
+
+type showLister interface {
+	ListShows() ([]hls.Show, error)
+}
+
+type libraryShow struct {
+	Name           string `json:"name"`
+	Playlist       string `json:"playlist,omitempty"`
+	Status         string `json:"status,omitempty"`
+	PendingReviews int    `json:"pendingReviews"`
+}
+
+func libraryShowsHandler(shows showLister, labelStore labels.LabelStore) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		items, err := loadLibraryShows(shows, labelStore)
+		if err != nil {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		if items == nil {
+			items = []libraryShow{}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
+		_ = json.NewEncoder(w).Encode(items)
+	})
+}
+
+func loadLibraryShows(shows showLister, labelStore labels.LabelStore) ([]libraryShow, error) {
+	available, err := shows.ListShows()
+	if err != nil {
+		return nil, fmt.Errorf("list shows: %w", err)
+	}
+
+	items := make([]libraryShow, 0, len(available))
+	for _, show := range available {
+		labelDoc, err := labelStore.Load(show.Name)
+		if err != nil {
+			return nil, fmt.Errorf("load labels for %q: %w", show.Name, err)
+		}
+		items = append(items, libraryShow{
+			Name:           show.Name,
+			Playlist:       show.Playlist,
+			Status:         show.Status,
+			PendingReviews: labels.PendingReviewCount(labelDoc.Candidates),
+		})
+	}
+	return items, nil
+}
 
 // faviconSVG is a small inline app icon (dark rounded tile + play glyph) served
 // at /favicon.ico so browsers stop logging a 404 on every page load.

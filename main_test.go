@@ -3,12 +3,17 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/sspeaks/large-video-streamer/internal/config"
+	"github.com/sspeaks/large-video-streamer/internal/hls"
 	"github.com/sspeaks/large-video-streamer/internal/labels"
 	"github.com/sspeaks/large-video-streamer/internal/share"
 	dbstore "github.com/sspeaks/large-video-streamer/internal/store"
@@ -116,6 +121,96 @@ func TestOpenStateStoresFlatFileRollbackSkipsSQLite(t *testing.T) {
 	if len(gotLabels.Boundaries) != 1 || gotLabels.Boundaries[0].Name != "flat-boundary" {
 		t.Fatalf("flat-file labels = %#v", gotLabels)
 	}
+}
+
+func TestLibraryShowsHandlerIncludesOnlyPersistedPendingReviewCounts(t *testing.T) {
+	handler := libraryShowsHandler(
+		staticShowLister{shows: []hls.Show{
+			{Name: "group-01", Playlist: "/hls/group-01/playlist.m3u8", Status: "ready"},
+			{Name: "group-02", Status: "processing"},
+		}},
+		&stubLabelStore{docs: map[string]labels.VideoLabels{
+			"group-01": {
+				Video: "group-01",
+				Candidates: []labels.Candidate{
+					{Status: "candidate", SuggestedName: "private suggestion"},
+					{Status: ""},
+					{Status: "named"},
+					{Status: "rejected"},
+				},
+			},
+			"group-02": {Video: "group-02"},
+		}},
+	)
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/shows", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("Cache-Control = %q, want no-store", got)
+	}
+	if body := rec.Body.String(); strings.Contains(body, "private suggestion") || strings.Contains(body, "candidates") {
+		t.Fatalf("response exposes candidate details: %s", body)
+	}
+
+	var got []libraryShow
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("len(shows) = %d, want 2: %#v", len(got), got)
+	}
+	if got[0].Name != "group-01" || got[0].PendingReviews != 2 {
+		t.Fatalf("group-01 = %#v, want 2 pending reviews", got[0])
+	}
+	if got[1].Name != "group-02" || got[1].PendingReviews != 0 {
+		t.Fatalf("group-02 = %#v, want no pending reviews", got[1])
+	}
+}
+
+func TestLibraryShowsHandlerFailsClosedWhenPersistedLabelsCannotLoad(t *testing.T) {
+	handler := libraryShowsHandler(
+		staticShowLister{shows: []hls.Show{{Name: "group-01", Status: "ready"}}},
+		&stubLabelStore{loadErr: errors.New("database unavailable")},
+	)
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/shows", nil))
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
+	}
+	if body := rec.Body.String(); body != "internal error\n" {
+		t.Fatalf("body = %q, want generic internal error", body)
+	}
+}
+
+type staticShowLister struct {
+	shows []hls.Show
+	err   error
+}
+
+func (s staticShowLister) ListShows() ([]hls.Show, error) {
+	return s.shows, s.err
+}
+
+type stubLabelStore struct {
+	docs    map[string]labels.VideoLabels
+	loadErr error
+}
+
+func (s *stubLabelStore) Load(video string) (labels.VideoLabels, error) {
+	if s.loadErr != nil {
+		return labels.VideoLabels{}, s.loadErr
+	}
+	return s.docs[video], nil
+}
+
+func (s *stubLabelStore) Save(labels.VideoLabels) error {
+	return nil
 }
 
 func mainTestDir(t *testing.T) string {
