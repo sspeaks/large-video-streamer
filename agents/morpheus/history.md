@@ -34,3 +34,20 @@ Initial setup complete. Architecture review pending — package interfaces in RE
 
 
 📌 Team update (2026-07-16T12:38:13.560-07:00): Design Review completed for #13–#14; contract approved. Both implementations merged (PR #15: Trinity path normalization 594ea645; PR #16: Tank safe HTTP errors 48b38c0). Parallel work model validated (zero conflicts). NixOS production-ready; security audit cleared.
+
+
+## Issue #27 Triage — 2026-07-16
+
+**Triaged:** Remove "Review priority" sort option from candidate-review UI (labeling page).
+
+**Finding:** The issue title "candidates order of appearence lsit" refers to the `review-priority` sort option (added in commit 42937bc) which sorts candidates by composite priority (conflicts, low-confidence, multi-source, suggested-name). Users report it's confusing and doesn't add value.
+
+**Decision:**
+- **Implementation owner:** Tank (Application Engineer)
+- **Reason:** Web-UX only, isolated to labeling page `candidateItems()` logic in `internal/labels/routes.go`. No detection algorithm, detection contract, or data-model changes.
+- **Scope:** Remove `review-priority` option from sort dropdown + remove corresponding sort logic. Preserve candidate review/promote/reject/filter workflow.
+- **Cross-domain impact:** None. Sort is pure UI-side JavaScript.
+
+**Labels corrected:** `squad` kept, `squad:morpheus` removed, `squad:tank` added, `go:needs-research` removed.
+
+**Triage comment:** https://github.com/sspeaks/large-video-streamer/issues/27#issuecomment-4998401448
