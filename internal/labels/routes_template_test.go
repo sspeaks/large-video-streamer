@@ -269,15 +269,17 @@ func TestLabelsPageRendersAutodetectCandidateMetadata(t *testing.T) {
 	}
 }
 
-func TestLabelsPageHighlightsReviewPriorityMetadata(t *testing.T) {
+// TestLabelsPageSourceAndConfidenceMetadata verifies that source display helpers
+// and low-confidence badges remain intact after the review-priority sort was removed.
+func TestLabelsPageSourceAndConfidenceMetadata(t *testing.T) {
 	var buf bytes.Buffer
 	if err := labelsPageTemplate.Execute(&buf, struct{ Show string }{Show: "quartet_finals"}); err != nil {
 		t.Fatalf("execute labels page template: %v", err)
 	}
 	out := buf.String()
 
+	// Source display helpers and confidence badges must still be present.
 	wants := []string{
-		"Review priority",
 		"const sourceDisplayName = (source) =>",
 		"black: 'Black'",
 		"freeze: 'Freeze'",
@@ -285,16 +287,27 @@ func TestLabelsPageHighlightsReviewPriorityMetadata(t *testing.T) {
 		"source-badge--freeze",
 		"const candidateLowConfidence = (candidate) =>",
 		"Low confidence",
-		"const candidateReviewPriority = (candidate) =>",
-		"sortControl.value === 'review-priority'",
 		"labels.candidates.map((candidate, index) => ({ candidate: candidate, index: index, key: candidateKey(candidate) }))",
-		"|| a.index - b.index",
 	}
 	for _, want := range wants {
 		if !strings.Contains(out, want) {
-			t.Fatalf("labels page should contain %q to prioritize uncertain/conflicting black/freeze candidates for review", want)
+			t.Fatalf("labels page should contain %q to show source and confidence metadata", want)
 		}
 	}
+
+	// The review-priority sort option and its implementation must be gone.
+	for _, notWant := range []string{
+		"Review priority",
+		"review-priority",
+		"const candidateReviewPriority",
+		"|| a.index - b.index",
+	} {
+		if strings.Contains(out, notWant) {
+			t.Fatalf("labels page should no longer contain %q after removing the review-priority sort", notWant)
+		}
+	}
+
+	// Sort must operate on a copy, not mutate the saved candidate order.
 	if strings.Contains(out, "labels.candidates.sort") {
 		t.Fatal("labels page should sort a copied candidate item list, not mutate saved/API candidate order")
 	}

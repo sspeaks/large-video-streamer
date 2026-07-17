@@ -175,7 +175,6 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
           <label for="candidate-sort">Sort
             <select id="candidate-sort" name="candidate-sort" autocomplete="off" data-lpignore="true">
               <option value="duration-desc">Duration, longest first</option>
-              <option value="review-priority">Review priority</option>
               <option value="time-asc">Time, earliest first</option>
             </select>
           </label>
@@ -373,14 +372,6 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
       return status + ' ' + badges.join(' ');
     };
     const candidateKey = (candidate) => String(Number(candidate.time) || 0) + '|' + String(Number(candidate.duration) || 0);
-    const candidateReviewPriority = (candidate) => {
-      let priority = 0;
-      if (candidate.conflict) priority += 100;
-      if (candidateLowConfidence(candidate)) priority += 50;
-      if (candidateSources(candidate).length > 1) priority += 10;
-      if (candidateSuggestedName(candidate)) priority += 5;
-      return priority;
-    };
     const candidateItems = () => {
       normalizeLabels();
       const minDuration = Math.max(0, Number(minDurationControl.value) || 0);
@@ -389,9 +380,7 @@ var labelsPageTemplate = template.Must(template.New("labels-page").Parse(`<!doct
         if ((Number(item.candidate.duration) || 0) < minDuration) return false;
         return true;
       });
-      if (sortControl.value === 'review-priority') {
-        items.sort((a, b) => candidateReviewPriority(b.candidate) - candidateReviewPriority(a.candidate) || a.index - b.index);
-      } else if (sortControl.value === 'duration-desc') {
+      if (sortControl.value === 'duration-desc') {
         items.sort((a, b) => (Number(b.candidate.duration) || 0) - (Number(a.candidate.duration) || 0));
       } else {
         items.sort((a, b) => (Number(a.candidate.time) || 0) - (Number(b.candidate.time) || 0));
