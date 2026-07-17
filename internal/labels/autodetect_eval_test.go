@@ -171,7 +171,7 @@ func TestAutodetectSampleBenchmark(t *testing.T) {
 	}
 	rawReport := benchmarkRawSignalOracle(truth, benchmarkTruthStartTime, rawSources, 20, rawScope, rawNotes)
 
-	candidates, err := srv.buildAutodetectCandidates(sourcePath, req)
+	candidates, rankingStats, err := srv.buildAutodetectCandidatesWithStats(sourcePath, req)
 	if err != nil {
 		t.Fatalf("build auto-detect candidates: %v", err)
 	}
@@ -180,6 +180,7 @@ func TestAutodetectSampleBenchmark(t *testing.T) {
 	t.Log(formatBenchmarkRunMetadata(sampleDir, sourcePath, cacheDir, benchmarkSignalMode(req)))
 	t.Log(formatBenchmarkRawSignalCeiling(rawReport))
 	t.Log(formatBenchmarkRawSignalMatrix(rawReport))
+	t.Logf("ranking surplus_suppressed=%d", rankingStats.surplusSuppressed)
 	t.Logf("start benchmark:\n%s", startScore.format(truth, benchmarkTruthStartTime, candidates))
 	t.Logf("start tolerance_sweep=%s", formatBenchmarkToleranceSweep(benchmarkToleranceSweep(truth, benchmarkTruthStartTime, candidates, benchmarkToleranceSweepTolerances)))
 	if err := gates.checkStart(startScore); err != nil {
