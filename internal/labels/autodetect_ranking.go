@@ -26,7 +26,16 @@ var (
 	autodetectSilenceOutputMinDur  = 6.0
 )
 
+type autodetectRankingStats struct {
+	surplusSuppressed int
+}
+
 func rankLineupSuggestions(lineup []autodetectLineupEntry, candidates []Candidate) []Candidate {
+	ranked, _ := rankLineupSuggestionsWithStats(lineup, candidates)
+	return ranked
+}
+
+func rankLineupSuggestionsWithStats(lineup []autodetectLineupEntry, candidates []Candidate) ([]Candidate, autodetectRankingStats) {
 	sorted := append([]Candidate(nil), candidates...)
 	sort.SliceStable(sorted, func(i, j int) bool {
 		return autodetectCandidateFusionTime(sorted[i]) < autodetectCandidateFusionTime(sorted[j])
@@ -35,7 +44,9 @@ func rankLineupSuggestions(lineup []autodetectLineupEntry, candidates []Candidat
 
 	names := lineupSuggestedNames(lineup)
 	assignments := eligibleMonotoneLineupAssignments(names, sorted)
+	surplusSuppressor := newSurplusCandidateSuppressor(lineup, sorted, assignments)
 	hasCorroboratingSource := hasAutodetectCorroborationSource(sorted)
+	var stats autodetectRankingStats
 	filtered := make([]Candidate, 0, len(sorted))
 	for i := range sorted {
 		if lineupName, ok := assignments[i]; ok {
@@ -43,12 +54,16 @@ func rankLineupSuggestions(lineup []autodetectLineupEntry, candidates []Candidat
 			continue
 		}
 		candidate := cleanupUnassignedLineupSuggestion(sorted[i])
+		if surplusSuppressor.suppresses(candidate) {
+			stats.surplusSuppressed++
+			continue
+		}
 		if dropUnassignedAutodetectCandidate(candidate, hasCorroboratingSource) {
 			continue
 		}
 		filtered = append(filtered, candidate)
 	}
-	return filtered
+	return filtered, stats
 }
 
 func eligibleMonotoneLineupAssignments(names []string, candidates []Candidate) map[int]string {
@@ -224,6 +239,90 @@ func dropUnassignedAutodetectCandidate(candidate Candidate, hasCorroboratingSour
 		singleSourceSilenceCandidate(candidate)
 }
 
+type surplusCandidateSuppressor struct {
+	fullLineupAssigned bool
+	intraPerformance   []autodetectTimeRange
+}
+
+type autodetectTimeRange struct {
+	start float64
+	end   float64
+}
+
+func newSurplusCandidateSuppressor(lineup []autodetectLineupEntry, candidates []Candidate, assignments map[int]string) surplusCandidateSuppressor {
+	names := lineupSuggestedNames(lineup)
+	if len(names) == 0 || len(assignments) != len(names) {
+		return surplusCandidateSuppressor{}
+	}
+
+	assignedIndexes := make([]int, 0, len(assignments))
+	for index := range assignments {
+		assignedIndexes = append(assignedIndexes, index)
+	}
+	sort.Ints(assignedIndexes)
+
+	performers := lineupSlotPerformers(lineup)
+	suppressor := surplusCandidateSuppressor{fullLineupAssigned: len(performers) == len(assignedIndexes)}
+	if !suppressor.fullLineupAssigned {
+		return surplusCandidateSuppressor{}
+	}
+	for slot := 0; slot+1 < len(assignedIndexes); slot++ {
+		if performers[slot] == "" || performers[slot] != performers[slot+1] {
+			continue
+		}
+		start := autodetectCandidateFusionTime(candidates[assignedIndexes[slot]])
+		end := autodetectCandidateFusionTime(candidates[assignedIndexes[slot+1]])
+		if end <= start {
+			continue
+		}
+		suppressor.intraPerformance = append(suppressor.intraPerformance, autodetectTimeRange{start: start, end: end})
+	}
+	return suppressor
+}
+
+func (s surplusCandidateSuppressor) suppresses(candidate Candidate) bool {
+	if !s.fullLineupAssigned || protectedAutodetectCandidate(candidate) || surplusCandidateHasReviewEvidence(candidate) {
+		return false
+	}
+	return true
+}
+
+func (s surplusCandidateSuppressor) isIntraPerformanceCandidate(_ int, candidate Candidate) bool {
+	candidateTime := autodetectCandidateFusionTime(candidate)
+	for _, timeRange := range s.intraPerformance {
+		if candidateTime > timeRange.start && candidateTime < timeRange.end {
+			return true
+		}
+	}
+	return false
+}
+
+func lineupSlotPerformers(lineup []autodetectLineupEntry) []string {
+	var performers []string
+	for _, entry := range lineup {
+		songCount := entry.SongCount
+		if songCount <= 0 {
+			songCount = 2
+		}
+		for song := 0; song < songCount; song++ {
+			performers = append(performers, entry.Name)
+		}
+	}
+	return performers
+}
+
+func surplusCandidateHasReviewEvidence(candidate Candidate) bool {
+	for _, source := range candidate.Sources {
+		switch source {
+		case "", autodetectSourceSilence, autodetectSourceAudio, autodetectSourceLineup:
+			continue
+		default:
+			return true
+		}
+	}
+	return false
+}
+
 func hasAutodetectCorroborationSource(candidates []Candidate) bool {
 	for _, candidate := range candidates {
 		for _, source := range candidate.Sources {
@@ -295,7 +394,9 @@ func mergeNearbyAutodetectDuplicate(a Candidate, b Candidate) (Candidate, bool) 
 }
 
 func protectedAutodetectCandidate(candidate Candidate) bool {
-	return strings.TrimSpace(candidate.SuggestedName) != "" ||
+	return candidate.Status == "named" ||
+		candidate.Status == "rejected" ||
+		strings.TrimSpace(candidate.SuggestedName) != "" ||
 		candidate.Conflict ||
 		sourceContains(candidate.Sources, autodetectSourceOCR)
 }

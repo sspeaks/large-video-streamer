@@ -373,7 +373,7 @@ func TestAssignLineupSuggestionsDropsShortUnassignedSilenceOnlyCandidate(t *test
 	assertSuggestedNames(t, got, []string{"quartet-a"})
 }
 
-func TestAssignLineupSuggestionsKeepsShortSilenceOnlyCandidateWithoutCorroboratingRunSignals(t *testing.T) {
+func TestAssignLineupSuggestionsDropsShortSurplusSilenceOnlyCandidateAfterFullLineup(t *testing.T) {
 	restore := setAutodetectSilenceOutputMinDurForTest(t, 5)
 	defer restore()
 	lineup := normalizedLineup(t, []autodetectLineupEntry{{Name: "quartet-a", SongCount: 1}})
@@ -384,13 +384,13 @@ func TestAssignLineupSuggestionsKeepsShortSilenceOnlyCandidateWithoutCorroborati
 
 	got := assignLineupSuggestions(lineup, candidates)
 
-	if len(got) != 2 {
-		t.Fatalf("len(candidates) = %d, want silence-only run unchanged: %#v", len(got), got)
+	if len(got) != 1 {
+		t.Fatalf("len(candidates) = %d, want surplus silence-only candidate dropped: %#v", len(got), got)
 	}
-	assertSuggestedNames(t, got, []string{"quartet-a", ""})
+	assertSuggestedNames(t, got, []string{"quartet-a"})
 }
 
-func TestAssignLineupSuggestionsKeepsLongUnassignedSilenceOnlyCandidate(t *testing.T) {
+func TestAssignLineupSuggestionsDropsLongSurplusSilenceOnlyCandidateAfterFullLineup(t *testing.T) {
 	restore := setAutodetectSilenceOutputMinDurForTest(t, 5)
 	defer restore()
 	lineup := normalizedLineup(t, []autodetectLineupEntry{{Name: "quartet-a", SongCount: 1}})
@@ -401,10 +401,10 @@ func TestAssignLineupSuggestionsKeepsLongUnassignedSilenceOnlyCandidate(t *testi
 
 	got := assignLineupSuggestions(lineup, candidates)
 
-	if len(got) != 2 {
-		t.Fatalf("len(candidates) = %d, want long unassigned silence-only candidate kept: %#v", len(got), got)
+	if len(got) != 1 {
+		t.Fatalf("len(candidates) = %d, want long surplus silence-only candidate dropped: %#v", len(got), got)
 	}
-	assertSuggestedNames(t, got, []string{"quartet-a", ""})
+	assertSuggestedNames(t, got, []string{"quartet-a"})
 }
 
 func TestAssignLineupSuggestionsKeepsCorroboratedShortUnassignedSilenceCandidate(t *testing.T) {
@@ -424,6 +424,157 @@ func TestAssignLineupSuggestionsKeepsCorroboratedShortUnassignedSilenceCandidate
 	assertSuggestedNames(t, got, []string{"quartet-a", ""})
 }
 
+func TestSurplusSuppressionFullLineup(t *testing.T) {
+	lineup := normalizedLineup(t, []autodetectLineupEntry{
+		{Name: "group-01", SongCount: 1},
+		{Name: "group-02", SongCount: 1},
+	})
+	candidates := []Candidate{
+		{Time: 10, Status: "candidate", Sources: []string{autodetectSourceOCR}, Confidence: 0.95, SuggestedName: "group-01"},
+		{Time: 30, Duration: 12, Status: "candidate", Sources: []string{autodetectSourceSilence}, Confidence: autodetectSilenceConfidence},
+		{Time: 45, Status: "candidate", Sources: []string{autodetectSourceAudio}, Confidence: autodetectAudioConfidence},
+		{Time: 90, Status: "candidate", Sources: []string{autodetectSourceOCR}, Confidence: 0.95, SuggestedName: "group-02"},
+	}
+
+	got, stats := assignLineupSuggestionsWithStats(lineup, candidates)
+
+	if stats.surplusSuppressed != 2 {
+		t.Fatalf("surplusSuppressed = %d, want 2", stats.surplusSuppressed)
+	}
+	assertSuggestedNames(t, got, []string{"group-01", "group-02"})
+}
+
+func TestSurplusSuppressionPartialLineup(t *testing.T) {
+	restore := setAutodetectLineupOutputMinScoreForTest(t, 0.7)
+	defer restore()
+	lineup := normalizedLineup(t, []autodetectLineupEntry{
+		{Name: "group-01", SongCount: 1},
+		{Name: "group-02", SongCount: 1},
+		{Name: "group-03", SongCount: 1},
+	})
+	candidates := []Candidate{
+		{Time: 10, Status: "candidate", Sources: []string{autodetectSourceOCR}, Confidence: 0.95, SuggestedName: "group-01"},
+		{Time: 30, Duration: 12, Status: "candidate", Sources: []string{autodetectSourceSilence}, Confidence: 0.3},
+		{Time: 90, Status: "candidate", Sources: []string{autodetectSourceOCR}, Confidence: 0.95, SuggestedName: "group-02"},
+	}
+
+	got, stats := assignLineupSuggestionsWithStats(lineup, candidates)
+
+	if stats.surplusSuppressed != 0 {
+		t.Fatalf("surplusSuppressed = %d, want 0 for partial lineup", stats.surplusSuppressed)
+	}
+	assertSuggestedNames(t, got, []string{"group-01", "", "group-02"})
+}
+
+func TestSurplusSuppressionMultiSource(t *testing.T) {
+	lineup := normalizedLineup(t, []autodetectLineupEntry{
+		{Name: "group-01", SongCount: 1},
+		{Name: "group-02", SongCount: 1},
+	})
+	candidates := []Candidate{
+		{Time: 10, Status: "candidate", Sources: []string{autodetectSourceOCR}, Confidence: 0.95, SuggestedName: "group-01"},
+		{Time: 30, Duration: 3, Status: "candidate", Sources: []string{autodetectSourceSilence, autodetectSourceColor}, Confidence: autodetectSilenceConfidence},
+		{Time: 90, Status: "candidate", Sources: []string{autodetectSourceOCR}, Confidence: 0.95, SuggestedName: "group-02"},
+	}
+
+	got, stats := assignLineupSuggestionsWithStats(lineup, candidates)
+
+	if stats.surplusSuppressed != 0 {
+		t.Fatalf("surplusSuppressed = %d, want 0 for visual-corroborated surplus", stats.surplusSuppressed)
+	}
+	assertSuggestedNames(t, got, []string{"group-01", "", "group-02"})
+}
+
+func TestSurplusSuppressionOCR(t *testing.T) {
+	lineup := normalizedLineup(t, []autodetectLineupEntry{
+		{Name: "group-01", SongCount: 1},
+		{Name: "group-02", SongCount: 1},
+	})
+	candidates := []Candidate{
+		{Time: 10, Status: "candidate", Sources: []string{autodetectSourceOCR}, Confidence: 0.95, SuggestedName: "group-01"},
+		{Time: 30, Status: "candidate", Sources: []string{autodetectSourceOCR}, Confidence: 0.95, SuggestedName: "unknown-group"},
+		{Time: 90, Status: "candidate", Sources: []string{autodetectSourceOCR}, Confidence: 0.95, SuggestedName: "group-02"},
+	}
+
+	got, stats := assignLineupSuggestionsWithStats(lineup, candidates)
+
+	if stats.surplusSuppressed != 0 {
+		t.Fatalf("surplusSuppressed = %d, want 0 for OCR-bearing surplus", stats.surplusSuppressed)
+	}
+	assertSuggestedNames(t, got, []string{"group-01", "unknown-group", "group-02"})
+}
+
+func TestSurplusSuppressionProtectedDecisions(t *testing.T) {
+	lineup := normalizedLineup(t, []autodetectLineupEntry{
+		{Name: "group-01", SongCount: 1},
+		{Name: "group-02", SongCount: 1},
+	})
+	candidates := []Candidate{
+		{Time: 10, Status: "candidate", Sources: []string{autodetectSourceOCR}, Confidence: 0.95, SuggestedName: "group-01"},
+		{Time: 30, Status: "named", Sources: []string{autodetectSourceSilence}, Confidence: 0.05},
+		{Time: 40, Status: "rejected", Sources: []string{autodetectSourceSilence}, Confidence: 0.05},
+		{Time: 50, Status: "candidate", Sources: []string{autodetectSourceSilence}, Confidence: 0.05, Conflict: true},
+		{Time: 90, Status: "candidate", Sources: []string{autodetectSourceOCR}, Confidence: 0.95, SuggestedName: "group-02"},
+	}
+
+	got, stats := assignLineupSuggestionsWithStats(lineup, candidates)
+
+	if stats.surplusSuppressed != 0 {
+		t.Fatalf("surplusSuppressed = %d, want 0 for protected decisions", stats.surplusSuppressed)
+	}
+	if len(got) != 5 {
+		t.Fatalf("len(candidates) = %d, want protected decisions preserved: %#v", len(got), got)
+	}
+}
+
+func TestIntraPerformanceGapSuppression(t *testing.T) {
+	lineup := normalizedLineup(t, []autodetectLineupEntry{{Name: "group-01", SongCount: 2}})
+	candidates := []Candidate{
+		{Time: 10, Status: "candidate", Sources: []string{autodetectSourceOCR}, Confidence: 0.95, SuggestedName: "group-01"},
+		{Time: 30, Duration: 12, Status: "candidate", Sources: []string{autodetectSourceSilence}, Confidence: autodetectSilenceConfidence},
+		{Time: 60, Status: "candidate", Sources: []string{autodetectSourceOCR}, Confidence: 0.95, SuggestedName: "group-01-song-2"},
+	}
+
+	got, stats := assignLineupSuggestionsWithStats(lineup, candidates)
+
+	if stats.surplusSuppressed != 1 {
+		t.Fatalf("surplusSuppressed = %d, want 1 intra-performance surplus candidate", stats.surplusSuppressed)
+	}
+	assertSuggestedNames(t, got, []string{"group-01", "group-01-song-2"})
+}
+
+func TestIntraPerformanceGapPreserved(t *testing.T) {
+	lineup := normalizedLineup(t, []autodetectLineupEntry{
+		{Name: "group-01", SongCount: 1},
+		{Name: "group-02", SongCount: 1},
+	})
+	candidates := []Candidate{
+		{Time: 10, Status: "candidate", Sources: []string{autodetectSourceOCR}, Confidence: 0.95, SuggestedName: "group-01"},
+		{Time: 30, Duration: 12, Status: "candidate", Sources: []string{autodetectSourceSilence}, Confidence: autodetectSilenceConfidence},
+		{Time: 60, Status: "candidate", Sources: []string{autodetectSourceOCR}, Confidence: 0.95, SuggestedName: "group-02"},
+	}
+	suppressor := newSurplusCandidateSuppressor(lineup, candidates, map[int]string{0: "group-01", 2: "group-02"})
+
+	if suppressor.isIntraPerformanceCandidate(1, candidates[1]) {
+		t.Fatal("candidate between different performers was treated as intra-performance")
+	}
+}
+
+func TestSurplusSuppressionEmptyLineup(t *testing.T) {
+	candidates := []Candidate{
+		{Time: 10, Duration: 12, Status: "candidate", Sources: []string{autodetectSourceSilence}, Confidence: autodetectSilenceConfidence},
+	}
+
+	got, stats := rankLineupSuggestionsWithStats(nil, candidates)
+
+	if stats.surplusSuppressed != 0 {
+		t.Fatalf("surplusSuppressed = %d, want 0 for empty lineup", stats.surplusSuppressed)
+	}
+	if len(got) != 1 {
+		t.Fatalf("len(candidates) = %d, want empty lineup behavior unchanged: %#v", len(got), got)
+	}
+}
+
 func TestAssignLineupSuggestionsKeepsAssignedShortSilenceOnlyCandidate(t *testing.T) {
 	restore := setAutodetectSilenceOutputMinDurForTest(t, 5)
 	defer restore()
@@ -440,7 +591,7 @@ func TestAssignLineupSuggestionsKeepsAssignedShortSilenceOnlyCandidate(t *testin
 	assertSuggestedNames(t, got, []string{"quartet-a"})
 }
 
-func TestAssignLineupSuggestionsSkipsEarlyLowConfidenceExtraCandidates(t *testing.T) {
+func TestAssignLineupSuggestionsDropsEarlySurplusSilenceCandidate(t *testing.T) {
 	restore := setAutodetectSilenceOutputMinDurForTest(t, 0)
 	defer restore()
 	lineup := normalizedLineup(t, []autodetectLineupEntry{{Name: "quartet-a"}})
@@ -452,13 +603,7 @@ func TestAssignLineupSuggestionsSkipsEarlyLowConfidenceExtraCandidates(t *testin
 
 	got := assignLineupSuggestions(lineup, candidates)
 
-	assertSuggestedNames(t, got, []string{"", "quartet-a", "quartet-a-song-2"})
-	if slices.Contains(got[0].Sources, autodetectSourceLineup) {
-		t.Fatalf("early extra Sources = %#v, want no lineup source", got[0].Sources)
-	}
-	if got[0].Confidence != autodetectSilenceConfidence {
-		t.Fatalf("early extra Confidence = %v, want original silence confidence", got[0].Confidence)
-	}
+	assertSuggestedNames(t, got, []string{"quartet-a", "quartet-a-song-2"})
 }
 
 func TestAssignLineupSuggestionsPreservesMismatchedOCRWhenBetterSequenceExists(t *testing.T) {
@@ -662,10 +807,7 @@ func TestAssignLineupSuggestionsHonorsSingleSongCount(t *testing.T) {
 
 	got := assignLineupSuggestions(lineup, candidates)
 
-	assertSuggestedNames(t, got, []string{"quartet-a", ""})
-	if got[1].Confidence != autodetectSilenceConfidence || !slices.Equal(got[1].Sources, []string{"silence"}) {
-		t.Fatalf("extra candidate = %#v, want silence-only confidence after single-song lineup is exhausted", got[1])
-	}
+	assertSuggestedNames(t, got, []string{"quartet-a"})
 }
 
 func TestAssignLineupSuggestionsKeepsNamesWithSpacesAndIgnoresAliases(t *testing.T) {
