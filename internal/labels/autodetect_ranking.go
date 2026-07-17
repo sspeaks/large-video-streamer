@@ -19,29 +19,6 @@ const (
 	autodetectLineupOCRConflictCost    = 6.0
 	autodetectLineupStaleNameCost      = 3.0
 	autodetectLineupNameMismatchCost   = 1.0
-
-	// autodetectIntraPerformanceMaxGapSeconds bounds how wide an
-	// intra-performance (same-performer, consecutive-song) gap may be
-	// before it is considered too wide to safely treat as "definitely no
-	// boundary in here" and left un-suppressed.
-	//
-	// The issue #29 design contract models this gap as the applause/MC
-	// pause between two songs from the *same* performer, expected to run
-	// roughly 5-15 seconds. This bound is set to 45s -- a 3x safety
-	// margin over that upper estimate, to tolerate normal timestamp
-	// slack -- while staying far below the danger zone identified during
-	// empirical validation against the private visual benchmark fixture:
-	// gaps in the 600s+ range there are almost always a symptom of the
-	// lineup-assignment DP mis-pairing candidates across *different*
-	// performers (e.g. when one performer has weak/absent raw signal),
-	// not a real same-performer pause, and suppressing inside them
-	// discards legitimate stop boundaries (the AC8 regression). Widening
-	// this bound to "recover" more surplus suppressions was empirically
-	// shown to reintroduce that exact regression once the bound
-	// approaches ~600s on that fixture, so this constant must not be
-	// increased without re-validating stop recall against a real
-	// benchmark; it is not a generic "tune for more suppression" knob.
-	autodetectIntraPerformanceMaxGapSeconds = 45.0
 )
 
 var (
@@ -49,16 +26,7 @@ var (
 	autodetectSilenceOutputMinDur  = 6.0
 )
 
-type autodetectRankingStats struct {
-	surplusSuppressed int
-}
-
 func rankLineupSuggestions(lineup []autodetectLineupEntry, candidates []Candidate) []Candidate {
-	ranked, _ := rankLineupSuggestionsWithStats(lineup, candidates)
-	return ranked
-}
-
-func rankLineupSuggestionsWithStats(lineup []autodetectLineupEntry, candidates []Candidate) ([]Candidate, autodetectRankingStats) {
 	sorted := append([]Candidate(nil), candidates...)
 	sort.SliceStable(sorted, func(i, j int) bool {
 		return autodetectCandidateFusionTime(sorted[i]) < autodetectCandidateFusionTime(sorted[j])
@@ -67,9 +35,7 @@ func rankLineupSuggestionsWithStats(lineup []autodetectLineupEntry, candidates [
 
 	names := lineupSuggestedNames(lineup)
 	assignments := eligibleMonotoneLineupAssignments(names, sorted)
-	surplusSuppressor := newSurplusCandidateSuppressor(lineup, sorted, assignments)
 	hasCorroboratingSource := hasAutodetectCorroborationSource(sorted)
-	var stats autodetectRankingStats
 	filtered := make([]Candidate, 0, len(sorted))
 	for i := range sorted {
 		if lineupName, ok := assignments[i]; ok {
@@ -77,16 +43,12 @@ func rankLineupSuggestionsWithStats(lineup []autodetectLineupEntry, candidates [
 			continue
 		}
 		candidate := cleanupUnassignedLineupSuggestion(sorted[i])
-		if surplusSuppressor.suppresses(i, candidate) {
-			stats.surplusSuppressed++
-			continue
-		}
 		if dropUnassignedAutodetectCandidate(candidate, hasCorroboratingSource) {
 			continue
 		}
 		filtered = append(filtered, candidate)
 	}
-	return filtered, stats
+	return filtered
 }
 
 func eligibleMonotoneLineupAssignments(names []string, candidates []Candidate) map[int]string {
@@ -262,103 +224,6 @@ func dropUnassignedAutodetectCandidate(candidate Candidate, hasCorroboratingSour
 		singleSourceSilenceCandidate(candidate)
 }
 
-type surplusCandidateSuppressor struct {
-	fullLineupAssigned bool
-	intraPerformance   []autodetectTimeRange
-}
-
-type autodetectTimeRange struct {
-	start float64
-	end   float64
-}
-
-func newSurplusCandidateSuppressor(lineup []autodetectLineupEntry, candidates []Candidate, assignments map[int]string) surplusCandidateSuppressor {
-	names := lineupSuggestedNames(lineup)
-	if len(names) == 0 || len(assignments) != len(names) {
-		return surplusCandidateSuppressor{}
-	}
-
-	assignedIndexes := make([]int, 0, len(assignments))
-	for index := range assignments {
-		assignedIndexes = append(assignedIndexes, index)
-	}
-	sort.Ints(assignedIndexes)
-
-	performers := lineupSlotPerformers(lineup)
-	suppressor := surplusCandidateSuppressor{fullLineupAssigned: len(performers) == len(assignedIndexes)}
-	if !suppressor.fullLineupAssigned {
-		return surplusCandidateSuppressor{}
-	}
-	for slot := 0; slot+1 < len(assignedIndexes); slot++ {
-		if performers[slot] == "" || performers[slot] != performers[slot+1] {
-			continue
-		}
-		start := autodetectCandidateFusionTime(candidates[assignedIndexes[slot]])
-		end := autodetectCandidateFusionTime(candidates[assignedIndexes[slot+1]])
-		if end <= start {
-			continue
-		}
-		if autodetectIntraPerformanceMaxGapSeconds > 0 && end-start > autodetectIntraPerformanceMaxGapSeconds {
-			continue
-		}
-		suppressor.intraPerformance = append(suppressor.intraPerformance, autodetectTimeRange{start: start, end: end})
-	}
-	return suppressor
-}
-
-// suppresses reports whether an unassigned candidate is safe to drop as
-// full-lineup surplus. A full lineup match alone is NOT sufficient: it only
-// tells us every expected performance slot has a start candidate, not that
-// every other remaining candidate is noise. In particular, the gap between
-// two different (non-consecutive-same-performer) assigned slots commonly
-// contains the legitimate stop boundary of the earlier performance (the
-// silence/applause after a song ends, before the next performer begins), and
-// must never be suppressed here. Suppression is therefore bounded to
-// isIntraPerformanceCandidate: the narrow, same-performer, consecutive-song
-// gap where a leftover candidate cannot be a real boundary of any kind.
-func (s surplusCandidateSuppressor) suppresses(index int, candidate Candidate) bool {
-	if !s.fullLineupAssigned || protectedAutodetectCandidate(candidate) || surplusCandidateHasReviewEvidence(candidate) {
-		return false
-	}
-	return s.isIntraPerformanceCandidate(index, candidate)
-}
-
-func (s surplusCandidateSuppressor) isIntraPerformanceCandidate(_ int, candidate Candidate) bool {
-	candidateTime := autodetectCandidateFusionTime(candidate)
-	for _, timeRange := range s.intraPerformance {
-		if candidateTime > timeRange.start && candidateTime < timeRange.end {
-			return true
-		}
-	}
-	return false
-}
-
-func lineupSlotPerformers(lineup []autodetectLineupEntry) []string {
-	var performers []string
-	for _, entry := range lineup {
-		songCount := entry.SongCount
-		if songCount <= 0 {
-			songCount = 2
-		}
-		for song := 0; song < songCount; song++ {
-			performers = append(performers, entry.Name)
-		}
-	}
-	return performers
-}
-
-func surplusCandidateHasReviewEvidence(candidate Candidate) bool {
-	for _, source := range candidate.Sources {
-		switch source {
-		case "", autodetectSourceSilence, autodetectSourceAudio, autodetectSourceLineup:
-			continue
-		default:
-			return true
-		}
-	}
-	return false
-}
-
 func hasAutodetectCorroborationSource(candidates []Candidate) bool {
 	for _, candidate := range candidates {
 		for _, source := range candidate.Sources {
@@ -430,9 +295,7 @@ func mergeNearbyAutodetectDuplicate(a Candidate, b Candidate) (Candidate, bool) 
 }
 
 func protectedAutodetectCandidate(candidate Candidate) bool {
-	return candidate.Status == "named" ||
-		candidate.Status == "rejected" ||
-		strings.TrimSpace(candidate.SuggestedName) != "" ||
+	return strings.TrimSpace(candidate.SuggestedName) != "" ||
 		candidate.Conflict ||
 		sourceContains(candidate.Sources, autodetectSourceOCR)
 }

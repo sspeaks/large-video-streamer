@@ -171,7 +171,7 @@ func TestAutodetectSampleBenchmark(t *testing.T) {
 	}
 	rawReport := benchmarkRawSignalOracle(truth, benchmarkTruthStartTime, rawSources, 20, rawScope, rawNotes)
 
-	candidates, rankingStats, err := srv.buildAutodetectCandidatesWithStats(sourcePath, req)
+	candidates, err := srv.buildAutodetectCandidates(sourcePath, req)
 	if err != nil {
 		t.Fatalf("build auto-detect candidates: %v", err)
 	}
@@ -180,7 +180,6 @@ func TestAutodetectSampleBenchmark(t *testing.T) {
 	t.Log(formatBenchmarkRunMetadata(sampleDir, sourcePath, cacheDir, benchmarkSignalMode(req)))
 	t.Log(formatBenchmarkRawSignalCeiling(rawReport))
 	t.Log(formatBenchmarkRawSignalMatrix(rawReport))
-	t.Logf("ranking surplus_suppressed=%d", rankingStats.surplusSuppressed)
 	t.Logf("start benchmark:\n%s", startScore.format(truth, benchmarkTruthStartTime, candidates))
 	t.Logf("start tolerance_sweep=%s", formatBenchmarkToleranceSweep(benchmarkToleranceSweep(truth, benchmarkTruthStartTime, candidates, benchmarkToleranceSweepTolerances)))
 	if err := gates.checkStart(startScore); err != nil {
@@ -645,13 +644,13 @@ func (c *countingVisualWindowSignals) DetectVisualWindow(path string, sceneThres
 }
 
 // TestCachedAutodetectSignalsReuseVisualWindowAcrossBenchmarkPhases proves
-// the AC10 benchmark performance fix: the raw-signal ceiling phase
+// the benchmark performance fix: the raw-signal ceiling phase
 // (benchmarkRawSignalSources) and production candidate generation
-// (buildAutodetectCandidatesWithStats) share one DetectVisualWindow
-// result/cache entry per identical anchor+params, instead of each phase
-// performing its own ffmpeg pass. Running both phases against the same
-// cache-backed signals runner must invoke the underlying visual detector
-// exactly once per anchor, not twice.
+// (buildAutodetectCandidates) share one DetectVisualWindow result/cache
+// entry per identical anchor+params, instead of each phase performing its
+// own ffmpeg pass. Running both phases against the same cache-backed
+// signals runner must invoke the underlying visual detector exactly once
+// per anchor, not twice.
 func TestCachedAutodetectSignalsReuseVisualWindowAcrossBenchmarkPhases(t *testing.T) {
 	noiseDB := detect.DefaultNoiseDB
 	minDur := detect.DefaultMinDur
@@ -683,8 +682,8 @@ func TestCachedAutodetectSignalsReuseVisualWindowAcrossBenchmarkPhases(t *testin
 	}
 
 	srv := &Server{autodetectSignals: cached}
-	if _, _, err := srv.buildAutodetectCandidatesWithStats("sample_video", req); err != nil {
-		t.Fatalf("buildAutodetectCandidatesWithStats returned error: %v", err)
+	if _, err := srv.buildAutodetectCandidates("sample_video", req); err != nil {
+		t.Fatalf("buildAutodetectCandidates returned error: %v", err)
 	}
 
 	if fake.visualWindowCalls != 1 {

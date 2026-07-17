@@ -248,12 +248,7 @@ func normalizeAutodetectAliases(aliases []string, lineupIndex int) ([]string, er
 }
 
 func assignLineupSuggestions(lineup []autodetectLineupEntry, candidates []Candidate) []Candidate {
-	ranked, _ := assignLineupSuggestionsWithStats(lineup, candidates)
-	return ranked
-}
-
-func assignLineupSuggestionsWithStats(lineup []autodetectLineupEntry, candidates []Candidate) ([]Candidate, autodetectRankingStats) {
-	return rankLineupSuggestionsWithStats(lineup, candidates)
+	return rankLineupSuggestions(lineup, candidates)
 }
 
 func assignLineupSuggestion(candidate Candidate, lineupName string) Candidate {
@@ -286,18 +281,13 @@ func assignLineupSuggestion(candidate Candidate, lineupName string) Candidate {
 }
 
 func (srv *Server) buildAutodetectCandidates(sourcePath string, req autodetectRequest) ([]Candidate, error) {
-	candidates, _, err := srv.buildAutodetectCandidatesWithStats(sourcePath, req)
-	return candidates, err
-}
-
-func (srv *Server) buildAutodetectCandidatesWithStats(sourcePath string, req autodetectRequest) ([]Candidate, autodetectRankingStats, error) {
 	signals := srv.autodetectSignalRunner()
 	var raw []Candidate
 	var silenceCandidates []Candidate
 	if req.UseSilence {
 		audio, err := signals.DetectAudio(sourcePath, *req.NoiseDB, *req.MinDur)
 		if err != nil {
-			return nil, autodetectRankingStats{}, err
+			return nil, err
 		}
 		silenceCandidates = candidatesFromSilences(audio.Silences)
 		raw = append(raw, silenceCandidates...)
@@ -307,7 +297,7 @@ func (srv *Server) buildAutodetectCandidatesWithStats(sourcePath string, req aut
 	if req.UseColor {
 		visualCandidates, err := srv.autodetectVisualCandidates(sourcePath, visualWindowAnchors(silenceCandidates))
 		if err != nil {
-			return nil, autodetectRankingStats{}, err
+			return nil, err
 		}
 		raw = append(raw, visualCandidates...)
 	}
@@ -317,11 +307,11 @@ func (srv *Server) buildAutodetectCandidatesWithStats(sourcePath string, req aut
 		var err error
 		candidates, err = srv.boostAutodetectOCR(sourcePath, candidates, req.Lineup)
 		if err != nil {
-			return nil, autodetectRankingStats{}, err
+			return nil, err
 		}
 	}
-	candidates, rankingStats := assignLineupSuggestionsWithStats(req.Lineup, candidates)
-	return candidates, rankingStats, nil
+	candidates = assignLineupSuggestions(req.Lineup, candidates)
+	return candidates, nil
 }
 
 func (srv *Server) autodetectSignalRunner() autodetectSignals {
