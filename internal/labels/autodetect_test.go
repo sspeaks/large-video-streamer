@@ -373,14 +373,7 @@ func TestAssignLineupSuggestionsDropsShortUnassignedSilenceOnlyCandidate(t *test
 	assertSuggestedNames(t, got, []string{"quartet-a"})
 }
 
-// TestAssignLineupSuggestionsPreservesShortSurplusSilenceCandidateWithoutIntraPerformanceGap
-// documents the corrected behavior from the AC8 stop-recall regression
-// (issue #29 / PR #31 review). A single-slot lineup being "fully assigned"
-// never produces an intra-performance gap (that requires two consecutive
-// same-performer slots), so a trailing unassigned silence-only candidate is
-// no longer treated as unconditional surplus: it may be a legitimate stop
-// boundary and must be preserved.
-func TestAssignLineupSuggestionsPreservesShortSurplusSilenceCandidateWithoutIntraPerformanceGap(t *testing.T) {
+func TestAssignLineupSuggestionsKeepsShortSilenceOnlyCandidateWithoutCorroboratingRunSignals(t *testing.T) {
 	restore := setAutodetectSilenceOutputMinDurForTest(t, 5)
 	defer restore()
 	lineup := normalizedLineup(t, []autodetectLineupEntry{{Name: "quartet-a", SongCount: 1}})
@@ -392,12 +385,12 @@ func TestAssignLineupSuggestionsPreservesShortSurplusSilenceCandidateWithoutIntr
 	got := assignLineupSuggestions(lineup, candidates)
 
 	if len(got) != 2 {
-		t.Fatalf("len(candidates) = %d, want surplus silence-only candidate preserved (no intra-performance gap): %#v", len(got), got)
+		t.Fatalf("len(candidates) = %d, want silence-only run unchanged: %#v", len(got), got)
 	}
 	assertSuggestedNames(t, got, []string{"quartet-a", ""})
 }
 
-func TestAssignLineupSuggestionsPreservesLongSurplusSilenceCandidateWithoutIntraPerformanceGap(t *testing.T) {
+func TestAssignLineupSuggestionsKeepsLongUnassignedSilenceOnlyCandidate(t *testing.T) {
 	restore := setAutodetectSilenceOutputMinDurForTest(t, 5)
 	defer restore()
 	lineup := normalizedLineup(t, []autodetectLineupEntry{{Name: "quartet-a", SongCount: 1}})
@@ -409,7 +402,7 @@ func TestAssignLineupSuggestionsPreservesLongSurplusSilenceCandidateWithoutIntra
 	got := assignLineupSuggestions(lineup, candidates)
 
 	if len(got) != 2 {
-		t.Fatalf("len(candidates) = %d, want surplus silence-only candidate preserved (no intra-performance gap): %#v", len(got), got)
+		t.Fatalf("len(candidates) = %d, want long unassigned silence-only candidate kept: %#v", len(got), got)
 	}
 	assertSuggestedNames(t, got, []string{"quartet-a", ""})
 }
@@ -431,194 +424,6 @@ func TestAssignLineupSuggestionsKeepsCorroboratedShortUnassignedSilenceCandidate
 	assertSuggestedNames(t, got, []string{"quartet-a", ""})
 }
 
-// TestSurplusSuppressionPreservesUnassignedStopBoundaryAcrossDifferentPerformers
-// is the regression test for the AC8 stop-recall failure found in review of
-// PR #31 (https://github.com/sspeaks/large-video-streamer/pull/31#issuecomment-5005692507):
-// a full lineup match by itself must NOT suppress every remaining unassigned
-// candidate. The gap between two different performers' assigned slots
-// (group-01 -> group-02 below) is exactly where a real performance's stop
-// boundary lives (applause/silence after the song ends, before the next
-// performer starts), so an unassigned, uncorroborated candidate there must be
-// retained even though the lineup is fully assigned.
-func TestSurplusSuppressionPreservesUnassignedStopBoundaryAcrossDifferentPerformers(t *testing.T) {
-	lineup := normalizedLineup(t, []autodetectLineupEntry{
-		{Name: "group-01", SongCount: 1},
-		{Name: "group-02", SongCount: 1},
-	})
-	candidates := []Candidate{
-		{Time: 10, Status: "candidate", Sources: []string{autodetectSourceOCR}, Confidence: 0.95, SuggestedName: "group-01"},
-		{Time: 30, Duration: 12, Status: "candidate", Sources: []string{autodetectSourceSilence}, Confidence: autodetectSilenceConfidence},
-		{Time: 45, Status: "candidate", Sources: []string{autodetectSourceAudio}, Confidence: autodetectAudioConfidence},
-		{Time: 90, Status: "candidate", Sources: []string{autodetectSourceOCR}, Confidence: 0.95, SuggestedName: "group-02"},
-	}
-
-	got, stats := assignLineupSuggestionsWithStats(lineup, candidates)
-
-	if stats.surplusSuppressed != 0 {
-		t.Fatalf("surplusSuppressed = %d, want 0: unassigned candidates between different performers may be legitimate stop boundaries", stats.surplusSuppressed)
-	}
-	assertSuggestedNames(t, got, []string{"group-01", "", "", "group-02"})
-}
-
-func TestSurplusSuppressionPartialLineup(t *testing.T) {
-	restore := setAutodetectLineupOutputMinScoreForTest(t, 0.7)
-	defer restore()
-	lineup := normalizedLineup(t, []autodetectLineupEntry{
-		{Name: "group-01", SongCount: 1},
-		{Name: "group-02", SongCount: 1},
-		{Name: "group-03", SongCount: 1},
-	})
-	candidates := []Candidate{
-		{Time: 10, Status: "candidate", Sources: []string{autodetectSourceOCR}, Confidence: 0.95, SuggestedName: "group-01"},
-		{Time: 30, Duration: 12, Status: "candidate", Sources: []string{autodetectSourceSilence}, Confidence: 0.3},
-		{Time: 90, Status: "candidate", Sources: []string{autodetectSourceOCR}, Confidence: 0.95, SuggestedName: "group-02"},
-	}
-
-	got, stats := assignLineupSuggestionsWithStats(lineup, candidates)
-
-	if stats.surplusSuppressed != 0 {
-		t.Fatalf("surplusSuppressed = %d, want 0 for partial lineup", stats.surplusSuppressed)
-	}
-	assertSuggestedNames(t, got, []string{"group-01", "", "group-02"})
-}
-
-func TestIntraPerformanceGapSuppression(t *testing.T) {
-	lineup := normalizedLineup(t, []autodetectLineupEntry{{Name: "group-01", SongCount: 2}})
-	candidates := []Candidate{
-		{Time: 10, Status: "candidate", Sources: []string{autodetectSourceOCR}, Confidence: 0.95, SuggestedName: "group-01"},
-		{Time: 30, Duration: 12, Status: "candidate", Sources: []string{autodetectSourceSilence}, Confidence: autodetectSilenceConfidence},
-		{Time: 40, Status: "candidate", Sources: []string{autodetectSourceOCR}, Confidence: 0.95, SuggestedName: "group-01-song-2"},
-	}
-
-	got, stats := assignLineupSuggestionsWithStats(lineup, candidates)
-
-	if stats.surplusSuppressed != 1 {
-		t.Fatalf("surplusSuppressed = %d, want 1 intra-performance surplus candidate", stats.surplusSuppressed)
-	}
-	assertSuggestedNames(t, got, []string{"group-01", "group-01-song-2"})
-}
-
-// TestIntraPerformanceGapSuppressionRespectsWidthBound is a regression test
-// for the empirical finding (from private benchmark validation of issue #29)
-// that a same-performer consecutive-song gap can still be too wide to safely
-// treat as boundary-free: when the lineup-assignment DP pairs two candidates
-// that are far apart in time -- much wider than a normal MC/applause pause --
-// that pairing is more likely a sign of a misassigned or missing-evidence
-// slot than an actual short intra-performance gap, and a legitimate stop (or
-// other) boundary may fall inside it. Suppression must therefore stay bounded
-// by autodetectIntraPerformanceMaxGapSeconds even when both endpoints belong
-// to the same performer.
-func TestIntraPerformanceGapSuppressionRespectsWidthBound(t *testing.T) {
-	lineup := normalizedLineup(t, []autodetectLineupEntry{{Name: "group-01", SongCount: 2}})
-	wideGap := autodetectIntraPerformanceMaxGapSeconds + 30
-	candidates := []Candidate{
-		{Time: 10, Status: "candidate", Sources: []string{autodetectSourceOCR}, Confidence: 0.95, SuggestedName: "group-01"},
-		{Time: 10 + wideGap/2, Duration: 12, Status: "candidate", Sources: []string{autodetectSourceSilence}, Confidence: autodetectSilenceConfidence},
-		{Time: 10 + wideGap, Status: "candidate", Sources: []string{autodetectSourceOCR}, Confidence: 0.95, SuggestedName: "group-01-song-2"},
-	}
-
-	got, stats := assignLineupSuggestionsWithStats(lineup, candidates)
-
-	if stats.surplusSuppressed != 0 {
-		t.Fatalf("surplusSuppressed = %d, want 0: gap %.0fs exceeds autodetectIntraPerformanceMaxGapSeconds (%.0fs) and must be preserved", stats.surplusSuppressed, wideGap, autodetectIntraPerformanceMaxGapSeconds)
-	}
-	assertSuggestedNames(t, got, []string{"group-01", "", "group-01-song-2"})
-}
-
-func TestIntraPerformanceGapPreserved(t *testing.T) {
-	lineup := normalizedLineup(t, []autodetectLineupEntry{
-		{Name: "group-01", SongCount: 1},
-		{Name: "group-02", SongCount: 1},
-	})
-	candidates := []Candidate{
-		{Time: 10, Status: "candidate", Sources: []string{autodetectSourceOCR}, Confidence: 0.95, SuggestedName: "group-01"},
-		{Time: 30, Duration: 12, Status: "candidate", Sources: []string{autodetectSourceSilence}, Confidence: autodetectSilenceConfidence},
-		{Time: 60, Status: "candidate", Sources: []string{autodetectSourceOCR}, Confidence: 0.95, SuggestedName: "group-02"},
-	}
-	suppressor := newSurplusCandidateSuppressor(lineup, candidates, map[int]string{0: "group-01", 2: "group-02"})
-
-	if suppressor.isIntraPerformanceCandidate(1, candidates[1]) {
-		t.Fatal("candidate between different performers was treated as intra-performance")
-	}
-}
-
-// TestSurplusSuppressionMultiSourceWithinIntraPerformanceGap verifies the
-// AC3 protection (multi-source corroboration) still holds within the sole
-// remaining suppression scope: an intra-performance (same performer,
-// consecutive song) gap.
-func TestSurplusSuppressionMultiSourceWithinIntraPerformanceGap(t *testing.T) {
-	lineup := normalizedLineup(t, []autodetectLineupEntry{{Name: "group-01", SongCount: 2}})
-	candidates := []Candidate{
-		{Time: 10, Status: "candidate", Sources: []string{autodetectSourceOCR}, Confidence: 0.95, SuggestedName: "group-01"},
-		{Time: 30, Duration: 3, Status: "candidate", Sources: []string{autodetectSourceSilence, autodetectSourceColor}, Confidence: autodetectSilenceConfidence},
-		{Time: 60, Status: "candidate", Sources: []string{autodetectSourceOCR}, Confidence: 0.95, SuggestedName: "group-01-song-2"},
-	}
-
-	got, stats := assignLineupSuggestionsWithStats(lineup, candidates)
-
-	if stats.surplusSuppressed != 0 {
-		t.Fatalf("surplusSuppressed = %d, want 0 for visual-corroborated surplus", stats.surplusSuppressed)
-	}
-	assertSuggestedNames(t, got, []string{"group-01", "", "group-01-song-2"})
-}
-
-// TestSurplusSuppressionOCRWithinIntraPerformanceGap verifies the AC4
-// protection (OCR-bearing candidates) still holds within an
-// intra-performance gap, even when the OCR name doesn't match either slot.
-func TestSurplusSuppressionOCRWithinIntraPerformanceGap(t *testing.T) {
-	lineup := normalizedLineup(t, []autodetectLineupEntry{{Name: "group-01", SongCount: 2}})
-	candidates := []Candidate{
-		{Time: 10, Status: "candidate", Sources: []string{autodetectSourceOCR}, Confidence: 0.95, SuggestedName: "group-01"},
-		{Time: 30, Status: "candidate", Sources: []string{autodetectSourceOCR}, Confidence: 0.95, SuggestedName: "unknown-group"},
-		{Time: 60, Status: "candidate", Sources: []string{autodetectSourceOCR}, Confidence: 0.95, SuggestedName: "group-01-song-2"},
-	}
-
-	got, stats := assignLineupSuggestionsWithStats(lineup, candidates)
-
-	if stats.surplusSuppressed != 0 {
-		t.Fatalf("surplusSuppressed = %d, want 0 for OCR-bearing surplus", stats.surplusSuppressed)
-	}
-	assertSuggestedNames(t, got, []string{"group-01", "unknown-group", "group-01-song-2"})
-}
-
-// TestSurplusSuppressionProtectedDecisionsWithinIntraPerformanceGap verifies
-// the AC5 protection (named/rejected/conflict-flagged candidates) still
-// holds within an intra-performance gap.
-func TestSurplusSuppressionProtectedDecisionsWithinIntraPerformanceGap(t *testing.T) {
-	lineup := normalizedLineup(t, []autodetectLineupEntry{{Name: "group-01", SongCount: 2}})
-	candidates := []Candidate{
-		{Time: 10, Status: "candidate", Sources: []string{autodetectSourceOCR}, Confidence: 0.95, SuggestedName: "group-01"},
-		{Time: 30, Status: "named", Sources: []string{autodetectSourceSilence}, Confidence: 0.05},
-		{Time: 40, Status: "rejected", Sources: []string{autodetectSourceSilence}, Confidence: 0.05},
-		{Time: 50, Status: "candidate", Sources: []string{autodetectSourceSilence}, Confidence: 0.05, Conflict: true},
-		{Time: 90, Status: "candidate", Sources: []string{autodetectSourceOCR}, Confidence: 0.95, SuggestedName: "group-01-song-2"},
-	}
-
-	got, stats := assignLineupSuggestionsWithStats(lineup, candidates)
-
-	if stats.surplusSuppressed != 0 {
-		t.Fatalf("surplusSuppressed = %d, want 0 for protected decisions", stats.surplusSuppressed)
-	}
-	if len(got) != 5 {
-		t.Fatalf("len(candidates) = %d, want protected decisions preserved: %#v", len(got), got)
-	}
-}
-
-func TestSurplusSuppressionEmptyLineup(t *testing.T) {
-	candidates := []Candidate{
-		{Time: 10, Duration: 12, Status: "candidate", Sources: []string{autodetectSourceSilence}, Confidence: autodetectSilenceConfidence},
-	}
-
-	got, stats := rankLineupSuggestionsWithStats(nil, candidates)
-
-	if stats.surplusSuppressed != 0 {
-		t.Fatalf("surplusSuppressed = %d, want 0 for empty lineup", stats.surplusSuppressed)
-	}
-	if len(got) != 1 {
-		t.Fatalf("len(candidates) = %d, want empty lineup behavior unchanged: %#v", len(got), got)
-	}
-}
-
 func TestAssignLineupSuggestionsKeepsAssignedShortSilenceOnlyCandidate(t *testing.T) {
 	restore := setAutodetectSilenceOutputMinDurForTest(t, 5)
 	defer restore()
@@ -635,12 +440,6 @@ func TestAssignLineupSuggestionsKeepsAssignedShortSilenceOnlyCandidate(t *testin
 	assertSuggestedNames(t, got, []string{"quartet-a"})
 }
 
-// TestAssignLineupSuggestionsSkipsEarlyLowConfidenceExtraCandidates confirms
-// the pre-issue-#29 invariant restored by the AC8 stop-recall fix: an
-// unassigned candidate that falls before the first assigned lineup slot is
-// not inside any intra-performance gap, so it cannot be proven safe to drop
-// and must be preserved (it could, for example, be a legitimate boundary
-// unrelated to this lineup's assigned slots).
 func TestAssignLineupSuggestionsSkipsEarlyLowConfidenceExtraCandidates(t *testing.T) {
 	restore := setAutodetectSilenceOutputMinDurForTest(t, 0)
 	defer restore()
