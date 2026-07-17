@@ -19,6 +19,29 @@ const (
 	autodetectLineupOCRConflictCost    = 6.0
 	autodetectLineupStaleNameCost      = 3.0
 	autodetectLineupNameMismatchCost   = 1.0
+
+	// autodetectIntraPerformanceMaxGapSeconds bounds how wide an
+	// intra-performance (same-performer, consecutive-song) gap may be
+	// before it is considered too wide to safely treat as "definitely no
+	// boundary in here" and left un-suppressed.
+	//
+	// The issue #29 design contract models this gap as the applause/MC
+	// pause between two songs from the *same* performer, expected to run
+	// roughly 5-15 seconds. This bound is set to 45s -- a 3x safety
+	// margin over that upper estimate, to tolerate normal timestamp
+	// slack -- while staying far below the danger zone identified during
+	// empirical validation against the private visual benchmark fixture:
+	// gaps in the 600s+ range there are almost always a symptom of the
+	// lineup-assignment DP mis-pairing candidates across *different*
+	// performers (e.g. when one performer has weak/absent raw signal),
+	// not a real same-performer pause, and suppressing inside them
+	// discards legitimate stop boundaries (the AC8 regression). Widening
+	// this bound to "recover" more surplus suppressions was empirically
+	// shown to reintroduce that exact regression once the bound
+	// approaches ~600s on that fixture, so this constant must not be
+	// increased without re-validating stop recall against a real
+	// benchmark; it is not a generic "tune for more suppression" knob.
+	autodetectIntraPerformanceMaxGapSeconds = 45.0
 )
 
 var (
@@ -54,7 +77,7 @@ func rankLineupSuggestionsWithStats(lineup []autodetectLineupEntry, candidates [
 			continue
 		}
 		candidate := cleanupUnassignedLineupSuggestion(sorted[i])
-		if surplusSuppressor.suppresses(candidate) {
+		if surplusSuppressor.suppresses(i, candidate) {
 			stats.surplusSuppressed++
 			continue
 		}
@@ -275,16 +298,29 @@ func newSurplusCandidateSuppressor(lineup []autodetectLineupEntry, candidates []
 		if end <= start {
 			continue
 		}
+		if autodetectIntraPerformanceMaxGapSeconds > 0 && end-start > autodetectIntraPerformanceMaxGapSeconds {
+			continue
+		}
 		suppressor.intraPerformance = append(suppressor.intraPerformance, autodetectTimeRange{start: start, end: end})
 	}
 	return suppressor
 }
 
-func (s surplusCandidateSuppressor) suppresses(candidate Candidate) bool {
+// suppresses reports whether an unassigned candidate is safe to drop as
+// full-lineup surplus. A full lineup match alone is NOT sufficient: it only
+// tells us every expected performance slot has a start candidate, not that
+// every other remaining candidate is noise. In particular, the gap between
+// two different (non-consecutive-same-performer) assigned slots commonly
+// contains the legitimate stop boundary of the earlier performance (the
+// silence/applause after a song ends, before the next performer begins), and
+// must never be suppressed here. Suppression is therefore bounded to
+// isIntraPerformanceCandidate: the narrow, same-performer, consecutive-song
+// gap where a leftover candidate cannot be a real boundary of any kind.
+func (s surplusCandidateSuppressor) suppresses(index int, candidate Candidate) bool {
 	if !s.fullLineupAssigned || protectedAutodetectCandidate(candidate) || surplusCandidateHasReviewEvidence(candidate) {
 		return false
 	}
-	return true
+	return s.isIntraPerformanceCandidate(index, candidate)
 }
 
 func (s surplusCandidateSuppressor) isIntraPerformanceCandidate(_ int, candidate Candidate) bool {

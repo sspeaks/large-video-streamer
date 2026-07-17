@@ -571,17 +571,11 @@ func TestBenchmarkRawSignalSourcesUsesWindowedVisualSignals(t *testing.T) {
 	if len(sources[6].Hits) != 1 || sources[6].Hits[0].Time != 121 {
 		t.Fatalf("color hits = %#v, want window color shift hit", sources[6].Hits)
 	}
-	if len(signals.sceneWindows) != 1 || signals.sceneWindows[0].start != 100 {
-		t.Fatalf("sceneWindows = %#v, want only long-silence anchor", signals.sceneWindows)
+	if len(signals.visualWindows) != 1 || signals.visualWindows[0].start != 100 || signals.visualWindows[0].duration != autodetectVisualAnchorWindow {
+		t.Fatalf("visualWindows = %#v, want a single combined visual scan for the long-silence anchor", signals.visualWindows)
 	}
-	if len(signals.colorWindows) != 1 || signals.colorWindows[0].start != 100 {
-		t.Fatalf("colorWindows = %#v, want only long-silence anchor", signals.colorWindows)
-	}
-	if len(signals.blackWindows) != 1 || signals.blackWindows[0].start != 100 {
-		t.Fatalf("blackWindows = %#v, want only long-silence anchor", signals.blackWindows)
-	}
-	if len(signals.freezeWindows) != 1 || signals.freezeWindows[0].start != 100 {
-		t.Fatalf("freezeWindows = %#v, want only long-silence anchor", signals.freezeWindows)
+	if len(signals.sceneWindows) != 0 || len(signals.colorWindows) != 0 || len(signals.blackWindows) != 0 || len(signals.freezeWindows) != 0 {
+		t.Fatalf("sceneWindows=%#v colorWindows=%#v blackWindows=%#v freezeWindows=%#v, want the per-component window detectors unused", signals.sceneWindows, signals.colorWindows, signals.blackWindows, signals.freezeWindows)
 	}
 	if signals.fullBlackCalls != 0 || signals.fullFreezeCalls != 0 || signals.fullSceneCalls != 0 || signals.fullColorCalls != 0 || signals.ocrCalls != 0 {
 		t.Fatalf("fullBlackCalls=%d fullFreezeCalls=%d fullSceneCalls=%d fullColorCalls=%d ocrCalls=%d, want no full-source or OCR calls", signals.fullBlackCalls, signals.fullFreezeCalls, signals.fullSceneCalls, signals.fullColorCalls, signals.ocrCalls)
@@ -628,11 +622,73 @@ func TestBenchmarkRawSignalSourcesSkipsVisualWhenNoWindowAnchors(t *testing.T) {
 		t.Fatalf("sources = %#v, want empty black/freeze/scene/color sources", sources)
 	}
 	if signals.fullBlackCalls != 0 || signals.fullFreezeCalls != 0 || signals.fullSceneCalls != 0 || signals.fullColorCalls != 0 ||
-		len(signals.blackWindows) != 0 || len(signals.freezeWindows) != 0 || len(signals.sceneWindows) != 0 || len(signals.colorWindows) != 0 {
-		t.Fatalf("signal calls fullBlack=%d fullFreeze=%d fullScene=%d fullColor=%d blackWindows=%#v freezeWindows=%#v sceneWindows=%#v colorWindows=%#v, want no visual scans", signals.fullBlackCalls, signals.fullFreezeCalls, signals.fullSceneCalls, signals.fullColorCalls, signals.blackWindows, signals.freezeWindows, signals.sceneWindows, signals.colorWindows)
+		len(signals.visualWindows) != 0 || len(signals.blackWindows) != 0 || len(signals.freezeWindows) != 0 || len(signals.sceneWindows) != 0 || len(signals.colorWindows) != 0 {
+		t.Fatalf("signal calls fullBlack=%d fullFreeze=%d fullScene=%d fullColor=%d visualWindows=%#v blackWindows=%#v freezeWindows=%#v sceneWindows=%#v colorWindows=%#v, want no visual scans", signals.fullBlackCalls, signals.fullFreezeCalls, signals.fullSceneCalls, signals.fullColorCalls, signals.visualWindows, signals.blackWindows, signals.freezeWindows, signals.sceneWindows, signals.colorWindows)
 	}
 	if got := strings.Join(notes, "+"); got != "audio_rms_loudness_active+visual_skipped_no_silence_anchors_current_window_only" {
 		t.Fatalf("notes = %q", got)
+	}
+}
+
+// countingVisualWindowSignals wraps benchmarkFakeRawSignals and counts calls
+// to DetectVisualWindow, so a test can prove the underlying visual detector
+// is invoked once per anchor even when both the raw-signal ceiling phase and
+// production candidate generation request visual signals for that anchor.
+type countingVisualWindowSignals struct {
+	*benchmarkFakeRawSignals
+	visualWindowCalls int
+}
+
+func (c *countingVisualWindowSignals) DetectVisualWindow(path string, sceneThreshold float64, sceneColorSampleRate float64, blackMinDuration float64, freezeMinDuration float64, start float64, duration float64) (detect.VisualSignals, error) {
+	c.visualWindowCalls++
+	return c.benchmarkFakeRawSignals.DetectVisualWindow(path, sceneThreshold, sceneColorSampleRate, blackMinDuration, freezeMinDuration, start, duration)
+}
+
+// TestCachedAutodetectSignalsReuseVisualWindowAcrossBenchmarkPhases proves
+// the AC10 benchmark performance fix: the raw-signal ceiling phase
+// (benchmarkRawSignalSources) and production candidate generation
+// (buildAutodetectCandidatesWithStats) share one DetectVisualWindow
+// result/cache entry per identical anchor+params, instead of each phase
+// performing its own ffmpeg pass. Running both phases against the same
+// cache-backed signals runner must invoke the underlying visual detector
+// exactly once per anchor, not twice.
+func TestCachedAutodetectSignalsReuseVisualWindowAcrossBenchmarkPhases(t *testing.T) {
+	noiseDB := detect.DefaultNoiseDB
+	minDur := detect.DefaultMinDur
+	fake := &countingVisualWindowSignals{benchmarkFakeRawSignals: &benchmarkFakeRawSignals{
+		silences: []detect.Silence{
+			{Start: 90, Time: 100, Duration: autodetectVisualAnchorMinDur},
+		},
+		windowBlackSegments: map[float64][]detect.BlackSegment{
+			100: {{Start: 90, End: 95, Duration: 5}},
+		},
+		windowFreezeSegments: map[float64][]detect.FreezeSegment{
+			100: {{Start: 130, End: 135, Duration: 5}},
+		},
+		windowScenes: map[float64][]detect.SceneChange{
+			100: {{Time: 112, Score: autodetectSceneThreshold + 1}},
+		},
+		windowSamples: map[float64][]detect.ColorSample{
+			100: {
+				{Time: 120, YMean: 10, UMean: 10, VMean: 10},
+				{Time: 121, YMean: 60, UMean: 10, VMean: 10},
+			},
+		},
+	}}
+	cached := &cachedAutodetectSignals{inner: fake, dir: t.TempDir()}
+	req := autodetectRequest{UseSilence: true, UseColor: true, NoiseDB: &noiseDB, MinDur: &minDur}
+
+	if _, _, _, err := benchmarkRawSignalSources("sample_video", req, cached); err != nil {
+		t.Fatalf("benchmarkRawSignalSources returned error: %v", err)
+	}
+
+	srv := &Server{autodetectSignals: cached}
+	if _, _, err := srv.buildAutodetectCandidatesWithStats("sample_video", req); err != nil {
+		t.Fatalf("buildAutodetectCandidatesWithStats returned error: %v", err)
+	}
+
+	if fake.visualWindowCalls != 1 {
+		t.Fatalf("visualWindowCalls = %d, want 1 (shared visual-window cache entry across raw-signal and candidate-generation phases)", fake.visualWindowCalls)
 	}
 }
 
@@ -1184,32 +1240,31 @@ func benchmarkRawSignalSources(sourcePath string, req autodetectRequest, signals
 	return sources, scope, notes, nil
 }
 
+// benchmarkWindowedVisualRawSignals computes the raw-signal ceiling report's
+// black/freeze/scene/color hits per silence anchor. It calls the same
+// combined signals.DetectVisualWindow(...) that production candidate
+// generation uses (autodetectVisualCandidatesWindow in autodetect.go), with
+// identical parameter values (sceneThreshold, sceneColorSampleRate,
+// blackMinDuration, freezeMinDuration, anchor.Time, autodetectVisualAnchorWindow).
+// Because both phases now call the exact same function with the exact same
+// arguments, cachedAutodetectSignals resolves them to the same
+// "visual-window" cache key/anchor, so a benchmark run reuses whichever
+// phase (raw ceiling or candidate generation) scans a given anchor first
+// instead of performing a separate ffmpeg pass per phase.
 func benchmarkWindowedVisualRawSignals(sourcePath string, anchors []Candidate, signals autodetectSignals) ([]detect.BlackSegment, []detect.FreezeSegment, []detect.SceneChange, []detect.ColorShift, error) {
 	var blackSegments []detect.BlackSegment
 	var freezeSegments []detect.FreezeSegment
 	var scenes []detect.SceneChange
 	var shifts []detect.ColorShift
 	for _, anchor := range anchors {
-		windowBlackSegments, err := signals.DetectBlackSegmentsWindow(sourcePath, autodetectBlackMinDuration, anchor.Time, autodetectVisualAnchorWindow)
+		windowSignals, err := signals.DetectVisualWindow(sourcePath, autodetectSceneThreshold, autodetectColorSampleRate, autodetectBlackMinDuration, autodetectFreezeMinDuration, anchor.Time, autodetectVisualAnchorWindow)
 		if err != nil {
-			return nil, nil, nil, nil, fmt.Errorf("black raw signal failed: %w", err)
+			return nil, nil, nil, nil, fmt.Errorf("visual raw signal failed: %w", err)
 		}
-		windowFreezeSegments, err := signals.DetectFreezeSegmentsWindow(sourcePath, autodetectFreezeMinDuration, anchor.Time, autodetectVisualAnchorWindow)
-		if err != nil {
-			return nil, nil, nil, nil, fmt.Errorf("freeze raw signal failed: %w", err)
-		}
-		windowScenes, err := signals.DetectSceneChangesWindow(sourcePath, autodetectSceneThreshold, autodetectSceneSampleRate, anchor.Time, autodetectVisualAnchorWindow)
-		if err != nil {
-			return nil, nil, nil, nil, fmt.Errorf("scene raw signal failed: %w", err)
-		}
-		windowSamples, err := signals.SampleFrameColorsWindow(sourcePath, autodetectColorSampleRate, "", anchor.Time, autodetectVisualAnchorWindow)
-		if err != nil {
-			return nil, nil, nil, nil, fmt.Errorf("color raw signal failed: %w", err)
-		}
-		blackSegments = append(blackSegments, windowBlackSegments...)
-		freezeSegments = append(freezeSegments, windowFreezeSegments...)
-		scenes = append(scenes, windowScenes...)
-		shifts = append(shifts, detect.DetectColorShifts(windowSamples, autodetectColorShiftThreshold, autodetectColorWindowSeconds)...)
+		blackSegments = append(blackSegments, windowSignals.BlackSegments...)
+		freezeSegments = append(freezeSegments, windowSignals.FreezeSegments...)
+		scenes = append(scenes, windowSignals.Scenes...)
+		shifts = append(shifts, detect.DetectColorShifts(windowSignals.ColorSamples, autodetectColorShiftThreshold, autodetectColorWindowSeconds)...)
 	}
 	return blackSegments, freezeSegments, scenes, shifts, nil
 }
